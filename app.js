@@ -44,6 +44,77 @@ function fmtClock(ts, refNow) {
   if (d.toDateString() !== n.toDateString()) t = d.toLocaleDateString([], { weekday: 'short' }) + ' ' + t;
   return t;
 }
+/* ------------------------------------------------------------------ time zones
+   Each stop's times are shown in that stop's own zone, with Eastern beside it. The zone comes from the stop's
+   coordinates using the bundled offline lookup (vendor/tz-lookup.js, CC0) — no Google Time Zone API, no cost. */
+const ET_ZONE = 'America/New_York';
+const deviceZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (e) { return null; } };
+const validZone = z => { if (!z || typeof z !== 'string') return false; try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return true; } catch (e) { return false; } };
+function zoneOf(lat, lng) {
+  try { if (lat == null || lng == null || typeof tzlookup !== 'function') return null; const z = tzlookup(+lat, +lng); return validZone(z) ? z : null; } catch (e) { return null; }
+}
+function stopZone(s) {   // cached on the stop (additive field `tz`); recomputed when its location changes
+  if (!s) return null;
+  if (s.lat == null || s.lng == null) return null;
+  if (!(s.tz && s.tzAt === s.lat + ',' + s.lng && validZone(s.tz))) {
+    const z = zoneOf(s.lat, s.lng);
+    if (z) { s.tz = z; s.tzAt = s.lat + ',' + s.lng; } else { delete s.tz; delete s.tzAt; return null; }
+  }
+  return s.tz;
+}
+const ZONE_LABELS = { 'America/Los_Angeles': 'PT', 'America/Denver': 'MT', 'America/Phoenix': 'MT', 'America/Boise': 'MT', 'America/Chicago': 'CT', 'America/New_York': 'ET', 'America/Detroit': 'ET', 'America/Anchorage': 'AKT', 'Pacific/Honolulu': 'HT' };
+function zoneLabel(tz, ts) {   // PT / MT / CT / ET (Arizona is MT too)
+  if (!tz) return '';
+  if (ZONE_LABELS[tz]) return ZONE_LABELS[tz];
+  for (const style of ['shortGeneric', 'short']) {
+    try {
+      const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: style }).formatToParts(new Date(ts || Date.now())).find(x => x.type === 'timeZoneName');
+      if (p && /^[A-Za-z]{2,5}$/.test(p.value)) return p.value;
+      if (p && /^GMT|^UTC/.test(p.value)) return p.value;
+    } catch (e) { }
+  }
+  return tz;
+}
+const isEasternZone = tz => !!tz && zoneLabel(tz) === 'ET';
+function dayKeyIn(ts, tz) { return new Date(ts).toLocaleDateString('en-CA', { timeZone: tz || undefined }); }
+function fmtIn(ts, tz, refTs) {   // "2:15 PM", with a weekday when it is a different day than refTs (in the same zone)
+  const z = tz || undefined;
+  let t = new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: z });
+  if (refTs != null && dayKeyIn(ts, tz) !== dayKeyIn(refTs, tz)) t = new Date(ts).toLocaleDateString('en-US', { weekday: 'short', timeZone: z }) + ' ' + t;
+  return t;
+}
+/* HTML for one moment: local time + zone, and Eastern in smaller type unless the place is already Eastern.
+   Unknown place -> this device's time with the device's zone label. */
+function timeHtml(ts, tz, refTs) {
+  if (!validZone(tz)) {
+    const dz = deviceZone();
+    return `<span class="t">${fmtIn(ts, null, refTs)}${dz ? ` <span class="tz">${esc(zoneLabel(dz, ts))}</span>` : ''}</span>`;
+  }
+  const main = `<span class="t">${fmtIn(ts, tz, refTs)} <span class="tz">${zoneLabel(tz, ts)}</span></span>`;
+  if (isEasternZone(tz)) return main;
+  return main + ` <span class="et">(${fmtIn(ts, ET_ZONE, refTs)} ET)</span>`;
+}
+function tzOffsetMs(tz, ts) {   // how far the wall clock in tz is ahead of UTC at instant ts
+  const parts = {};
+  new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' })
+    .formatToParts(new Date(ts)).forEach(p => { parts[p.type] = +p.value; });
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour % 24, parts.minute, parts.second) - Math.floor(ts / 1000) * 1000;
+}
+function wallToUtc(v, tz) {   // "2026-11-21T06:00" read as a clock time in tz -> real instant (ms)
+  const m = /^(\d+)-(\d+)-(\d+)T(\d+):(\d+)/.exec(v || ''); if (!m) return NaN;
+  const [Y, Mo, D_, H, Mi] = m.slice(1).map(Number), wall = Date.UTC(Y, Mo - 1, D_, H, Mi);
+  if (!validZone(tz)) return new Date(Y, Mo - 1, D_, H, Mi).getTime();   // unknown zone: device time
+  let ts = wall - tzOffsetMs(tz, wall);
+  ts = wall - tzOffsetMs(tz, ts);   // second pass settles daylight-saving edges
+  return ts;
+}
+function utcToWall(ts, tz) {   // instant -> "YYYY-MM-DDTHH:MM" on the clock in tz (for the date/time picker)
+  const z = validZone(tz) ? tz : undefined, p = {};
+  new Intl.DateTimeFormat('en-US', { timeZone: z, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(new Date(ts)).forEach(x => { p[x.type] = x.value; });
+  return `${p.year}-${p.month}-${p.day}T${String(+p.hour % 24).padStart(2, '0')}:${p.minute}`;
+}
+
 function fmtDur(sec) {
   sec = Math.max(0, Math.round(sec));
   if (sec < 60) return '< 1 min';
@@ -243,6 +314,7 @@ async function editStopText(stop, isRegular) {
   const g = pendingGeo; pendingGeo = null;
   stop.name = name; stop.query = name;
   stop.lat = g ? g.lat : null; stop.lng = g ? g.lng : null;   // live mode: Google looks the text up
+  delete stop.tz; delete stop.tzAt;
   if (isRegular) { saveRegular(); }
   else { state.trip.results = null; saveTrip(); }
   renderSetup(); toast('Updated “' + name + '”.');
@@ -941,12 +1013,12 @@ function renderList(forceStructure) {
     if (s.dropped) return;
     const el = list.querySelector(`.stop[data-id="${s.id}"]`); if (!el) return;
     const e = res && res.etas[s.id];
-    const set = (f, t) => { const n = el.querySelector(`[data-f="${f}"]`); if (n && n.textContent !== t) n.textContent = t; };
+    const set = (f, t, html) => { const n = el.querySelector(`[data-f="${f}"]`); if (!n) return; if (html) { if (n.innerHTML !== t) n.innerHTML = t; } else if (n.textContent !== t) n.textContent = t; };
     if (!e) { set('eta', '--:--'); set('rem', 'Calculating…'); set('dist', ''); return; }
     const here = s.lat != null && D.pos && haversineMi(D.pos, s) < 0.3;
     const passed = !here && e.arrived;
     el.classList.toggle('here', !!here); el.classList.toggle('passed', !!passed);
-    set('eta', here ? 'HERE' : passed ? 'PASSED' : fmtClock(e.eta, now));
+    if (here || passed) set('eta', here ? 'HERE' : 'PASSED'); else set('eta', timeHtml(e.eta, stopZone(s), now), true);
     set('rem', here ? 'At stop' : passed ? 'Tap Dropped Off' : fmtDur((e.eta - now) / 1000) + ' left');
     set('dist', here || passed ? '' : fmtMi(e.dist));
   });
@@ -954,7 +1026,7 @@ function renderList(forceStructure) {
   const rem = remainingStops();
   const last = rem[rem.length - 1], le = last && res && res.etas[last.id];
   $('#summary').innerHTML = rem.length
-    ? `<span><b>${rem.length}</b> stop${rem.length > 1 ? 's' : ''} left</span><span>Final: <b>${le ? esc(last.name.split(',')[0]) + ' ' + fmtClock(le.eta, now) : '—'}</b></span>`
+    ? `<span><b>${rem.length}</b> stop${rem.length > 1 ? 's' : ''} left</span><span>Final: <b>${le ? esc(last.name.split(',')[0]) + ' ' + timeHtml(le.eta, stopZone(last), now) : '—'}</b></span>`
     : '<span>Trip finished</span>';
 }
 function uiTick() {
@@ -1046,9 +1118,37 @@ async function acquireWake() {
 function releaseWake() { try { D.wake && D.wake.release(); } catch (e) { } D.wake = null; }
 
 /* ================================================================== PREVIEW (plan a trip without driving) */
-const P = { map: null, token: 0, plan: null, busy: false, myPos: null, mapsUrl: '' };
+const P = { touched: false, startGeo: null, map: null, token: 0, plan: null, busy: false, myPos: null, mapsUrl: '' };
 const MAPS_URL_MAX_WAYPOINTS = 9;
-const pvPrefs = () => Object.assign({ from: 'San Diego, CA' }, LS.get('busEta.preview', {}));
+const pvPrefs = () => Object.assign({ from: 'San Diego, CA', zones: {} }, LS.get('busEta.preview', {}));
+const pvZoneKey = t => String(t || '').trim().toLowerCase();
+function pvRememberZone(from, tz) {   // remember which time zone a typed starting place is in (this device only)
+  if (!tz || !from) return;
+  const pr = pvPrefs(), keys = Object.keys(pr.zones || {});
+  if (keys.length > 30) delete pr.zones[keys[0]];
+  pr.zones = Object.assign({}, pr.zones, { [pvZoneKey(from)]: tz });
+  LS.set('busEta.preview', { from: pr.from, zones: pr.zones });
+}
+function pvKnownZone(from) {   // zone for a starting place without any lookup: remembered, or San Diego (the default)
+  const c = pvPrefs().zones || {}, z = c[pvZoneKey(from)];
+  if (validZone(z)) return z;
+  if (/^san diego\b/i.test(from || '')) return zoneOf(DEMO_ORIGIN.lat, DEMO_ORIGIN.lng) || 'America/Los_Angeles';
+  return null;
+}
+function pvUpdateWhenLabel(from, tz) {
+  const place = pvZoneKey(from) === 'my location' ? 'your location' : String(from || '').split(',')[0].trim() || 'the start';
+  $('#pvWhenLabel').textContent = validZone(tz) ? `Leaving ${place} at (${zoneLabel(tz, Date.now())})` : `Leaving ${place} at (this device's time)`;
+}
+async function pvResolveStartZone(from, origin) {   // coordinates -> zone, with free lookups only
+  if (origin) return zoneOf(origin.lat, origin.lng);
+  const known = pvKnownZone(from); if (known) return known;
+  try {
+    pvSetBusy(true, 'Looking up the starting place…');
+    const g = await Promise.race([geocodeDemo(from), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 6000))]);
+    if (g) { P.startGeo = { from: pvZoneKey(from), lat: g.lat, lng: g.lng }; return zoneOf(g.lat, g.lng); }
+  } catch (e) { }
+  return null;   // unknown: the picker is then read as this device's time
+}
 const localInputValue = d => { const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); };
 
 /* Turn drive legs into a timetable. legT = seconds per leg, legD = meters per leg (one leg per stop, in order).
@@ -1058,7 +1158,7 @@ function buildPreviewPlan(depMs, legT, legD, stops, standard) {
   stops.forEach((s, i) => {
     const arrive = t + legT[i] * 1000, last = i === stops.length - 1;
     const dwell = last ? 0 : stopDwellMin(s, standard) * 60;
-    rows.push({ id: s.id, name: s.name, driveSec: legT[i], meters: legD[i], arrive, dwellMin: stopDwellMin(s, standard), leave: last ? null : arrive + dwell * 1000, last });
+    rows.push({ id: s.id, name: s.name, tz: s.tz || null, driveSec: legT[i], meters: legD[i], arrive, dwellMin: stopDwellMin(s, standard), leave: last ? null : arrive + dwell * 1000, last });
     t = arrive + dwell * 1000; miles += legD[i] / M_PER_MI; drive += legT[i]; wait += dwell;
   });
   const final = rows.length ? rows[rows.length - 1].arrive : depMs;
@@ -1069,7 +1169,9 @@ function openPreview() {
   const stops = remainingStops(); if (!stops.length) return;
   const pr = pvPrefs();
   $('#pvFrom').value = pr.from || 'San Diego, CA';
-  $('#pvWhen').value = localInputValue(new Date());
+  const z0 = pvKnownZone($('#pvFrom').value) || (pvZoneKey($('#pvFrom').value) === 'my location' ? deviceZone() : null);
+  $('#pvWhen').value = utcToWall(Date.now(), z0);   // "now" on the clock of the starting place
+  P.touched = false; pvUpdateWhenLabel($('#pvFrom').value, z0);
   show('preview');
   runPreview();
 }
@@ -1094,15 +1196,13 @@ function pvMyLocation() {
 }
 function pvSetError(t) { const b = $('#pvErr'); b.textContent = t || ''; b.classList.toggle('hidden', !t); }
 function pvSetBusy(on, text) { P.busy = on; $('#pvBusy').textContent = text || ''; $('#pvBusy').classList.toggle('hidden', !on); $('#btnPvUpdate').disabled = on; }
-async function runPreview(notice) {
+async function runPreview(notice, again) {
   const mine = ++P.token, stops = remainingStops();
   if (!stops.length) return;
   let from = pvOriginText();
   if (!from) { pvSetError('Type where the trip starts, or tap “Use my location”.'); return; }
-  const depPicked = $('#pvWhen').value ? new Date($('#pvWhen').value) : new Date();
-  if (isNaN(depPicked)) { pvSetError('Pick a start date and time.'); return; }
-  const dep = new Date(Math.max(depPicked.getTime(), Date.now() + 60000));   // Google rejects a start time in the past, so never earlier than 1 minute from now
-  LS.set('busEta.preview', { from });
+  if (!$('#pvWhen').value && P.touched) { pvSetError('Pick a start date and time.'); return; }
+  LS.set('busEta.preview', { from, zones: pvPrefs().zones });
   if (P.map && (P.map instanceof LeafletMap) !== !!(isDemo() || notice)) { try { P.map.destroy(); } catch (e) { } P.map = null; if (P.gmap && (isDemo() || notice)) { try { P.gmap.destroy(); } catch (e) { } P.gmap = null; } }
   if (P.gmap && !P.map && (isDemo() || notice)) { try { P.gmap.destroy(); } catch (e) { } P.gmap = null; }
   pvSetError(notice || null); pvSetBusy(true, 'Planning the route…');
@@ -1113,8 +1213,21 @@ async function runPreview(notice) {
       pvSetBusy(true, 'Finding your location…');
       origin = await pvMyLocation(); if (mine !== P.token) return;
     }
+    // the picked time is a clock time at the STARTING place, not on this device
+    const startTz = await pvResolveStartZone(from, origin); if (mine !== P.token) return;
+    pvUpdateWhenLabel(from, startTz);
+    if (!P.touched) $('#pvWhen').value = utcToWall(Date.now(), startTz);
+    const picked = wallToUtc($('#pvWhen').value, startTz);
+    if (isNaN(picked)) { pvSetError('Pick a start date and time.'); return; }
+    const dep = new Date(Math.max(picked, Date.now() + 60000));   // Google rejects a start time in the past, so never earlier than 1 minute from now
+    pvSetBusy(true, 'Planning the route…');
     const r = (isDemo() || notice) ? await pvDemo(stops, from, origin, dep.getTime(), mine) : await pvLive(stops, from, origin, dep, mine);
     if (mine !== P.token || !r) return;
+    // Google's own start point is the final word on the zone; if our guess was off, redo once with the right one
+    const realTz = r.startPt ? zoneOf(r.startPt.lat, r.startPt.lng) : startTz;
+    if (realTz && realTz !== startTz && !again) { pvRememberZone(from, realTz); pvSetBusy(false); return runPreview(notice, true); }
+    if (realTz) pvRememberZone(from, realTz);
+    r.startTz = realTz || startTz;
     P.plan = r.plan; P.mapsUrl = pvMapsUrl(from, origin, stops);
     renderPreview(r, stops, from, origin);
   } catch (e) {
@@ -1138,12 +1251,14 @@ async function pvLive(stops, from, origin, dep, mine) {
   const legT = legs.map(l => l.sec * f), legD = legs.map(l => l.meters);
   const pts = stops.map((s, i) => legs[i] && legs[i].end ? { id: s.id, name: s.name, lat: legs[i].end.lat, lng: legs[i].end.lng } : null).filter(Boolean);
   const startPt = legs[0] && legs[0].start ? legs[0].start : (origin || null);
-  return { plan: buildPreviewPlan(dep.getTime(), legT, legD, stops.slice(0, legs.length), state.settings.dwellMin), path: res.path, pts, startPt, source: 'google' };
+  const planStops = stops.slice(0, legs.length).map((s, i) => Object.assign({}, s, { tz: (legs[i].end && zoneOf(legs[i].end.lat, legs[i].end.lng)) || stopZone(s) }));
+  return { plan: buildPreviewPlan(dep.getTime(), legT, legD, planStops, state.settings.dwellMin), path: res.path, pts, startPt, source: 'google' };
 }
 async function pvDemo(stops, from, origin, depMs, mine) {
   if (!P.map) P.map = new LeafletMap($('#pvMap'));
   if (!origin) {
     if (/^san diego\b/i.test(from)) origin = { lat: DEMO_ORIGIN.lat, lng: DEMO_ORIGIN.lng };
+    else if (P.startGeo && P.startGeo.from === pvZoneKey(from)) origin = { lat: P.startGeo.lat, lng: P.startGeo.lng };
     else {
       pvSetBusy(true, 'Looking up the starting place…');
       let g = null; try { g = await geocodeDemo(from); } catch (e) { throw new Error('Demo mode needs internet to look up places.'); }
@@ -1163,7 +1278,8 @@ async function pvDemo(stops, from, origin, depMs, mine) {
   const built = buildDemoPath(origin, pts), f = state.settings.speedPct / 100;
   const legMi = built.stopS.map((d, i) => d - (i ? built.stopS[i - 1] : 0));
   const legT = legMi.map(mi => mi / 62 * 3600 * 1.05 * f), legD = legMi.map(mi => mi * M_PER_MI);
-  return { plan: buildPreviewPlan(depMs, legT, legD, stops, state.settings.dwellMin), path: built.path, pts, startPt: origin, source: 'demo' };
+  const planStops = stops.map((s, i) => Object.assign({}, s, { tz: zoneOf(pts[i].lat, pts[i].lng) }));
+  return { plan: buildPreviewPlan(depMs, legT, legD, planStops, state.settings.dwellMin), path: built.path, pts, startPt: origin, source: 'demo' };
 }
 function pvMapsUrl(from, origin, stops) {
   const q = s => encodeURIComponent(s.query || s.name);
@@ -1175,14 +1291,15 @@ function pvMapsUrl(from, origin, stops) {
 }
 function renderPreview(r, stops, from, origin) {
   const pl = r.plan, dep = pl.depMs;
-  const clock = ts => fmtClock(ts, dep);
+  const stz = r.startTz, lastRow = pl.rows[pl.rows.length - 1];
+  const when = (ts, tz) => timeHtml(ts, tz, dep);
   const hm = sec => fmtDur(sec);
   $('#pvSummary').innerHTML = `
     <div class="pvsum"><span>Total miles</span><b>${Math.round(pl.totalMiles).toLocaleString()} mi</b></div>
     <div class="pvsum"><span>Driving time</span><b>${hm(pl.driveSec)}</b></div>
     <div class="pvsum"><span>Time at stops</span><b>${hm(pl.stopSec)}</b></div>
-    <div class="pvsum final"><span>Final arrival</span><b>${esc(stops[stops.length - 1].name.split(',')[0])} ${clock(pl.finalArrival)}</b></div>
-    <div class="pvsum wide"><span>Whole trip, start to finish</span><b>${hm(pl.tripSec)}</b>  <small>leaving ${clock(dep)} from ${esc(from)}</small></div>`;
+    <div class="pvsum final"><span>Final arrival</span><b>${esc(stops[stops.length - 1].name.split(',')[0])} ${when(pl.finalArrival, lastRow && lastRow.tz)}</b></div>
+    <div class="pvsum wide"><span>Whole trip, start to finish</span><b>${hm(pl.tripSec)}</b>  <small>leaving ${when(dep, stz)} from ${esc(from)}</small></div>`;
   $('#pvList').innerHTML = pl.rows.map((w, i) => `
     <div class="pvstop" data-id="${w.id}">
       <div class="num">${i + 1}</div>
@@ -1190,8 +1307,8 @@ function renderPreview(r, stops, from, origin) {
         <div class="name">${esc(w.name)}</div>
         <div class="drive">🚌 Drive: <b>${hm(w.driveSec)}</b> · <b>${fmtMi(w.meters)}</b> ${i === 0 ? 'from the start' : 'from the stop before'}</div>
         <div class="times">
-          <div><span>Arrive</span><b data-f="arrive">${clock(w.arrive)}</b></div>
-          ${w.last ? '<div><span>Trip ends here</span><b>🏁</b></div>' : `<div><span>Stop time</span><b data-f="dwell">${fmtMin(w.dwellMin)}</b></div><div><span>Leave</span><b data-f="leave">${clock(w.leave)}</b></div>`}
+          <div><span>Arrive</span><b data-f="arrive">${when(w.arrive, w.tz)}</b></div>
+          ${w.last ? '<div><span>Trip ends here</span><b>🏁</b></div>' : `<div><span>Stop time</span><b data-f="dwell">${fmtMin(w.dwellMin)}</b></div><div><span>Leave</span><b data-f="leave">${when(w.leave, w.tz)}</b></div>`}
         </div>
       </div>
     </div>`).join('');
@@ -1211,8 +1328,10 @@ function bindPreview() {
   $('#btnPvStart').addEventListener('click', () => { P.token++; releasePreviewMap(); startDrive(); });
   $('#btnPvUpdate').addEventListener('click', () => runPreview());
   $('#btnPvLoc').addEventListener('click', () => { $('#pvFrom').value = 'My location'; runPreview(); });
+  $('#pvFrom').addEventListener('input', () => { if (!P.touched) { const z = pvKnownZone($('#pvFrom').value); if (z) { $('#pvWhen').value = utcToWall(Date.now(), z); pvUpdateWhenLabel($('#pvFrom').value, z); } } });
   $('#pvFrom').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); runPreview(); } });
-  $('#pvWhen').addEventListener('change', () => runPreview());
+  $('#pvWhen').addEventListener('input', () => { P.touched = true; });
+  $('#pvWhen').addEventListener('change', () => { P.touched = true; runPreview(); });
   $('#btnPvMaps').addEventListener('click', () => { if (P.mapsUrl) window.open(P.mapsUrl, '_blank', 'noopener'); });
 }
 
@@ -1224,6 +1343,6 @@ function boot() {
   const q = new URLSearchParams(location.search);
   if (state.trip.started && remainingStops().length && !q.has('setup')) startDrive();
   else show('setup');
-  window.__busEta = { state, D, P };   // for debugging/tests
+  window.__busEta = { state, D, P, tz: { zoneOf, zoneLabel, timeHtml, wallToUtc, utcToWall, stopZone, fmtIn } };   // for debugging/tests
 }
 boot();

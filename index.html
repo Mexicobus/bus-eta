@@ -130,7 +130,7 @@
         <label class="field">Starting from
           <input id="pvFrom" type="text" autocomplete="off" autocapitalize="words" enterkeyhint="go" placeholder="City or address">
         </label>
-        <label class="field">Leaving on
+        <label class="field"><span id="pvWhenLabel">Leaving at</span>
           <input id="pvWhen" type="datetime-local">
         </label>
         <div class="row">
@@ -217,6 +217,7 @@
 </div>
 
 <script src="vendor/leaflet.js"></script>
+<script src="vendor/tz-lookup.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
