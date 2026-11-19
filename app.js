@@ -76,7 +76,7 @@ const SAMPLE_STOPS = [
   { name: 'Ephrata, PA', lat: 40.1798, lng: -76.1783 }
 ];
 const state = {
-  settings: Object.assign({ apiKey: '', dwellMin: 10, speedPct: 100, forceDemo: false, demoSpeed: 300 }, LS.get('busEta.settings', {})),
+  settings: Object.assign({ apiKey: '', dwellMin: 10, speedPct: 100, forceDemo: false, demoSpeed: 300, updateMin: 5 }, LS.get('busEta.settings', {})),
   regular: LS.get('busEta.regular', null),
   trip: LS.get('busEta.trip', { stops: [], started: false, results: null }),
   manage: false,
@@ -207,6 +207,7 @@ function openSettings() {
   const s = state.settings;
   $('#setKey').value = s.apiKey; $('#setDwell').value = s.dwellMin; $('#setPct').value = s.speedPct;
   $('#setForceDemo').checked = s.forceDemo;
+  $('#setUpd').value = String(UPDATE_CHOICES.includes(+s.updateMin) ? +s.updateMin : 5);
   $('#settings').classList.remove('hidden');
 }
 function saveSettingsForm() {
@@ -215,6 +216,7 @@ function saveSettingsForm() {
   s.dwellMin = Math.max(0, Math.min(120, parseInt($('#setDwell').value, 10) || 0));
   s.speedPct = Math.max(50, Math.min(200, parseInt($('#setPct').value, 10) || 100));
   s.forceDemo = $('#setForceDemo').checked;
+  s.updateMin = UPDATE_CHOICES.includes(+$('#setUpd').value) ? +$('#setUpd').value : 5;
   if (s.apiKey !== oldKey) state.sessionDemo = false;
   saveSettings();
   $('#settings').classList.add('hidden');
@@ -522,6 +524,11 @@ class GoogleMap {
     this.map = new google.maps.Map(el, { center: { lat: 38, lng: -98 }, zoom: 5, styles: GOOGLE_DARK, disableDefaultUI: true, zoomControl: true, gestureHandling: 'greedy', clickableIcons: false });
     this.markers = []; this.line = null; this.bus = null;
   }
+  reset() {   // keep the (billable) map object, just clear what we drew on it
+    this.markers.forEach(m => m.setMap(null)); this.markers = [];
+    if (this.line) { this.line.setMap(null); this.line = null; }
+    if (this.bus) { this.bus.setMap(null); this.bus = null; }
+  }
   setRoute(path) {
     const p = path.map(a => ({ lat: a[0], lng: a[1] }));
     if (this.line) this.line.setPath(p);
@@ -579,10 +586,13 @@ function loadGoogle(key) {
 /* ================================================================== DRIVE */
 const D = {
   mode: null, map: null, timers: [], watchId: null, pos: null, posAt: 0,
-  svc: null, inflight: false, lastCompute: 0, lastComputePos: null,
+  svc: null, inflight: false, lastCompute: 0, lastComputePos: null, pending: false, gotFix: false, gmap: null, liveBase: null,
   results: null,      // { updatedAt, source, etas:{id:{eta,dur,dist,arrived}}, path:[[lat,lng]] }
   err: null, fitMode: 'next', sig: '', wake: null, demo: null, authFailed: false, retryAt: 0, token: 0
 };
+const UPDATE_CHOICES = [5, 10, 15];       // minutes between Google requests while driving
+const MIN_GAP_MS = 60000;                  // never more than one Google request per minute, however often buttons are tapped
+const updateMs = () => (UPDATE_CHOICES.includes(+state.settings.updateMin) ? +state.settings.updateMin : 5) * 60000;
 const nowMs = () => (D.mode === 'demo' && D.demo) ? D.demo.simNow : Date.now();
 
 async function startDrive() {
@@ -591,7 +601,7 @@ async function startDrive() {
   state.trip.started = true; saveTrip();
   show('drive');
   D.mode = isDemo() ? 'demo' : 'live';
-  D.err = null; D.authFailed = false; D.sig = ''; D.pos = null; D.results = null;
+  D.err = null; D.authFailed = false; D.sig = ''; D.pos = null; D.results = null; D.gotFix = false; D.liveBase = null; D.pending = false;
   $('#demoStrip').classList.toggle('hidden', D.mode !== 'demo');
   $('#demoMark').classList.toggle('hidden', D.mode !== 'demo');
   $('#errBanner').classList.add('hidden');
@@ -603,6 +613,7 @@ async function startDrive() {
   D.timers.push(setInterval(uiTick, 1000));
 
   if (D.mode === 'demo') {
+    dropGmap();
     D.map = new LeafletMap($('#map'));
     initDemo();
     D.timers.push(setInterval(demoTick, 1000));
@@ -621,9 +632,14 @@ function stopDrive() {
   D.timers.forEach(clearInterval); D.timers = [];
   if (D.watchId != null && navigator.geolocation) navigator.geolocation.clearWatch(D.watchId);
   D.watchId = null; D.inflight = false;
-  if (D.map) { try { D.map.destroy(); } catch (e) { } D.map = null; }
+  if (D.map) {
+    if (D.map instanceof GoogleMap) { D.map.reset(); D.gmap = D.map; }   // reuse it next time: every new Google map is a billable "map load"
+    else { try { D.map.destroy(); } catch (e) { } }
+    D.map = null; D.mapKey = null;
+  }
   D.svc = null; D.demo = null; D.token++;
 }
+function dropGmap() { if (D.gmap) { try { D.gmap.destroy(); } catch (e) { } D.gmap = null; } }
 function showMapMsg(t) { const m = $('#mapMsg'); if (!t) { m.classList.add('hidden'); return; } m.textContent = t; m.classList.remove('hidden'); }
 function showErr(t) { D.err = t; const b = $('#errBanner'); b.textContent = t || ''; b.classList.toggle('hidden', !t); }
 
@@ -642,12 +658,12 @@ async function initLive(session) {
   }
   if (session !== D.token || D.mode !== 'live') return;
   showMapMsg(null); showErr(null);
-  D.map = new GoogleMap($('#map'));
+  D.map = D.gmap || new GoogleMap($('#map')); D.gmap = D.map;
   D.svc = true;   // routing goes through googleRoute() (Routes library, loaded on first use)
   if (D.results && D.results.path) D.map.setRoute(D.results.path);
   refreshMap(true);
   startGps();
-  D.timers.push(setInterval(() => maybeRefresh(false), 5000));
+  D.timers.push(setInterval(() => maybeRefresh(false), 1000));   // cheap check only; Google is asked on the schedule below
 }
 function onGoogleAuthFailure() {
   if (!$('#preview').classList.contains('hidden')) { runPreview('Google rejected the API key — showing a demo estimate instead. Check the key in ⚙ Settings.'); return; }
@@ -662,17 +678,24 @@ function startGps() {
     D.posAt = Date.now();
     if (D.err && D.err.startsWith('Location')) showErr(null);
     D.map && D.map.setBus(D.pos);
-    if (!D.lastComputePos) maybeRefresh(true);
-    else if (haversineMi(D.pos, D.lastComputePos) * M_PER_MI > 1500) maybeRefresh(false, true);
+    if (!D.gotFix) { D.gotFix = true; maybeRefresh(true); }   // one request as soon as we know where we are; moving does NOT trigger more
     refreshMap(false);
   }, err => {
     showErr('Location problem: ' + (err.code === 1 ? 'permission denied — allow Location for this site in Safari settings.' : err.message));
   }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
 }
-function maybeRefresh(force, moved) {
-  if (D.mode !== 'live' || !D.svc || D.inflight) return;
+/* When Google is asked (live driving):
+   - on start, on Dropped off / Undo, after the trip is edited, and when ⟳ Update now is tapped ("force")
+   - otherwise only every "Update times every" minutes (Settings: 5 / 10 / 15)
+   - never more than once per MIN_GAP_MS: a forced request that comes too soon is held and sent when the minute is up.
+   Between requests the times just count down from the last answer. */
+function maybeRefresh(force) {
+  if (D.mode !== 'live' || !D.svc) return;
+  if (force) D.pending = true;
+  if (D.inflight) return;
   const since = Date.now() - D.lastCompute;
-  if (force || since >= 60000 || (moved && since >= 20000)) computeLive();
+  if (since < MIN_GAP_MS) return;
+  if (D.pending || since >= updateMs()) computeLive();
 }
 function dirErrMsg(st, willRetry) {   // plain-words Google route errors (live driving + preview)
   const msgs = {
@@ -737,6 +760,7 @@ function computeLive() {
   const rem = remainingStops();
   if (!rem.length || !D.pos) return;
   if (!navigator.onLine) { return; }
+  D.pending = false;
   D.inflight = true; D.lastCompute = Date.now(); D.lastComputePos = { ...D.pos };
   const loc = s => s.lat != null ? { lat: s.lat, lng: s.lng } : (s.query || s.name);
   const session = D.token;
@@ -764,7 +788,9 @@ function computeLive() {
     })
     .catch(e => {
       if (session !== D.token) return;
-      showErr(dirErrMsg(e.routeStatus || routeStatusOf(e), true) + ' Showing last ETAs.');
+      const st = e.routeStatus || routeStatusOf(e);
+      showErr(dirErrMsg(st, true) + ' Showing last ETAs.');
+      if (st !== 'REQUEST_DENIED') D.lastCompute = Math.min(D.lastCompute, Date.now() - updateMs() + MIN_GAP_MS);   // temporary trouble: try again in a minute, not after the full wait
     })
     .finally(() => { D.inflight = false; });
 }
@@ -938,10 +964,15 @@ function uiTick() {
   if (D.mode === 'demo') { u.textContent = 'Simulated clock'; u.className = 'chip'; }
   else if (!r) { u.textContent = D.pos ? 'Calculating…' : 'Waiting for GPS…'; u.className = 'chip warn'; }
   else {
-    const age = Date.now() - r.updatedAt;
-    u.textContent = (offline ? 'NO SIGNAL · ' : '') + 'Updated ' + fmtAgo(age);
-    u.className = 'chip ' + (offline || age > 300000 ? 'bad' : age > 120000 ? 'warn' : 'ok');
+    const age = Date.now() - r.updatedAt, every = updateMs();
+    u.textContent = (offline ? 'NO SIGNAL · ' : '') + 'Times from Google, updated ' + fmtAgo(age);
+    u.className = 'chip ' + (offline || age > every * 2 + 60000 ? 'bad' : age > every * 1.5 + 30000 ? 'warn' : 'ok');
   }
+  const rb = $('#btnRefresh');
+  if (D.mode === 'live') {
+    const wait = D.pending ? Math.max(1, Math.ceil((MIN_GAP_MS - (Date.now() - D.lastCompute)) / 1000)) : 0;
+    rb.textContent = D.inflight ? '⟳ Updating…' : wait > 0 && wait <= 60 ? '⟳ Updating in ' + wait + 's' : '⟳ Update now';
+  } else rb.textContent = '⟳ Refresh';
   const g = $('#gpsChip');
   if (D.mode === 'live' && D.pos && Date.now() - D.posAt > 120000) { g.textContent = 'GPS lost'; g.className = 'chip bad'; }
   else g.classList.add('hidden');
@@ -960,7 +991,7 @@ function bindDrive() {
     setDropped(b.dataset.id, false);
   });
   $('#btnEdit').addEventListener('click', () => { stopDrive(); releaseWake(); state.trip.started = false; saveTrip(); show('setup'); renderSetup(); });
-  $('#btnRefresh').addEventListener('click', () => { if (D.mode === 'live') { D.lastCompute = 0; maybeRefresh(true); } else demoTick(); });
+  $('#btnRefresh').addEventListener('click', () => { if (D.mode === 'live') { maybeRefresh(true); uiTick(); } else demoTick(); });
   $('#btnFit').addEventListener('click', () => {
     D.fitMode = D.fitMode === 'next' ? 'all' : 'next';
     $('#btnFit').textContent = D.fitMode === 'next' ? 'Map: next stop' : 'Map: whole route';
@@ -979,7 +1010,7 @@ function bindDrive() {
     dm.d = Math.max(dm.d, dm.stopSById[nxt.id] - 3); dm.dwellLeft = 0; demoTick();
   });
   $('#btnDemoReset').addEventListener('click', () => { state.trip.stops.forEach(s => s.dropped = false); saveTrip(); startDrive(); });
-  window.addEventListener('online', () => { if (D.mode === 'live') { D.lastCompute = 0; maybeRefresh(true); uiTick(); } });
+  window.addEventListener('online', () => { if (D.mode === 'live') { maybeRefresh(true); uiTick(); } });
   window.addEventListener('offline', uiTick);
   window.addEventListener('resize', () => D.map && D.map.resize());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !$('#drive').classList.contains('hidden')) { acquireWake(); if (D.mode === 'live') maybeRefresh(false); } });
@@ -993,7 +1024,7 @@ function setDropped(id, v) {
     demoTick();
   } else {
     renderList(true); refreshMap(true);
-    D.lastCompute = 0; maybeRefresh(true);
+    maybeRefresh(true);
   }
   uiTick();
 }
@@ -1042,9 +1073,15 @@ function openPreview() {
   show('preview');
   runPreview();
 }
+function releasePreviewMap() {
+  if (!P.map) return;
+  if (P.map instanceof GoogleMap) { P.map.reset(); P.gmap = P.map; }   // keep it: each new Google map is a billable load
+  else { try { P.map.destroy(); } catch (e) { } }
+  P.map = null;
+}
 function closePreview() {
   P.token++; P.busy = false;
-  if (P.map) { try { P.map.destroy(); } catch (e) { } P.map = null; }
+  releasePreviewMap();
   show('setup'); renderSetup();
 }
 function pvMyLocation() {
@@ -1066,7 +1103,8 @@ async function runPreview(notice) {
   if (isNaN(depPicked)) { pvSetError('Pick a start date and time.'); return; }
   const dep = new Date(Math.max(depPicked.getTime(), Date.now() + 60000));   // Google rejects a start time in the past, so never earlier than 1 minute from now
   LS.set('busEta.preview', { from });
-  if (P.map && (P.map instanceof LeafletMap) !== !!(isDemo() || notice)) { try { P.map.destroy(); } catch (e) { } P.map = null; }
+  if (P.map && (P.map instanceof LeafletMap) !== !!(isDemo() || notice)) { try { P.map.destroy(); } catch (e) { } P.map = null; if (P.gmap && (isDemo() || notice)) { try { P.gmap.destroy(); } catch (e) { } P.gmap = null; } }
+  if (P.gmap && !P.map && (isDemo() || notice)) { try { P.gmap.destroy(); } catch (e) { } P.gmap = null; }
   pvSetError(notice || null); pvSetBusy(true, 'Planning the route…');
   $('#pvList').innerHTML = ''; $('#pvSummary').innerHTML = ''; P.plan = null;
   try {
@@ -1088,7 +1126,8 @@ async function pvLive(stops, from, origin, dep, mine) {
   try { await loadGoogle(state.settings.apiKey); }
   catch (e) { if (D.authFailed) return null; throw new Error('Can’t reach Google Maps (no signal?). Check your connection and tap Update preview.'); }
   if (mine !== P.token) return null;
-  if (!P.map) P.map = new GoogleMap($('#pvMap'));
+  if (!P.map) P.map = P.gmap || new GoogleMap($('#pvMap'));
+  P.gmap = P.map;
   const loc = s => s.lat != null ? { lat: s.lat, lng: s.lng } : (s.query || s.name);
   const res = await googleRoute({
     origin: origin ? { lat: origin.lat, lng: origin.lng } : from,
@@ -1169,7 +1208,7 @@ function renderPreview(r, stops, from, origin) {
 function bindPreview() {
   $('#btnPreview').addEventListener('click', openPreview);
   $('#btnPvBack').addEventListener('click', closePreview);
-  $('#btnPvStart').addEventListener('click', () => { P.token++; if (P.map) { try { P.map.destroy(); } catch (e) { } P.map = null; } startDrive(); });
+  $('#btnPvStart').addEventListener('click', () => { P.token++; releasePreviewMap(); startDrive(); });
   $('#btnPvUpdate').addEventListener('click', () => runPreview());
   $('#btnPvLoc').addEventListener('click', () => { $('#pvFrom').value = 'My location'; runPreview(); });
   $('#pvFrom').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); runPreview(); } });

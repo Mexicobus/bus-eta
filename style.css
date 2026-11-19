@@ -54,6 +54,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
 .reg{min-height:58px;font-size:20px;padding:0 18px}
 .reg.in{color:var(--green);border-color:#1f6b3f}
 .reg-del{min-width:52px;padding:0;color:var(--red);border-color:#5a2b2d}
+select{width:100%;font:inherit;font-size:22px;min-height:60px;padding:0 12px;border-radius:14px;border:2px solid var(--line);background:#0b1118;color:var(--text);margin-top:6px;color-scheme:dark}
 input[type=text],input[type=password],input[type=number]{width:100%;font:inherit;font-size:22px;min-height:60px;padding:0 16px;border-radius:14px;border:2px solid var(--line);background:#0b1118;color:var(--text)}
 input:focus{outline:3px solid var(--blue);border-color:var(--blue)}
 .check{display:flex;align-items:center;gap:12px;margin:12px 0;font-size:19px}

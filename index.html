@@ -85,7 +85,7 @@
     <button id="awakeChip" class="chip chipbtn" title="Tap to retry keeping the screen awake">☀ …</button>
     <span class="spacer"></span>
     <button id="btnFit" class="btn small ghost">Map: next stop</button>
-    <button id="btnRefresh" class="btn small ghost">⟳ Refresh</button>
+    <button id="btnRefresh" class="btn small ghost">⟳ Update now</button>
     <button id="btnEdit" class="btn small ghost">✎ Edit trip</button>
   </header>
   <div id="demoStrip" class="demo-strip hidden">
@@ -166,6 +166,10 @@
       </label>
     </div>
     <p class="hint">This is the standard time at a stop (new stops use it). You can change any one stop's time in the stop list by tapping its “Stop time” button. A stop's time is added to the ETAs after it. Adjustment 100% = use Google's drive time as is; 110% = 10% longer.</p>
+    <label class="field">Update times every
+      <select id="setUpd"><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select>
+    </label>
+    <p class="hint">While driving, the app asks Google for fresh times this often and counts down on its own in between (less often = lower Google cost). “⟳ Update now” on the driving screen asks right away, at most once a minute.</p>
     <label class="check"><input id="setForceDemo" type="checkbox"> <span>Force demo mode (ignore key)</span></label>
     <div class="row">
       <button id="btnSetSave" class="btn primary">Save</button>
