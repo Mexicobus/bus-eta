@@ -80,6 +80,8 @@ const state = {
   regular: LS.get('busEta.regular', null),
   trip: LS.get('busEta.trip', { stops: [], started: false, results: null }),
   manage: false,
+  saved: LS.get('busEta.savedTrips', []),        // named trips on this device
+  loadedId: LS.get('busEta.loadedTrip', null),   // which saved trip the current stops came from
   sessionDemo: false   // set if Google rejects the key during this session
 };
 if (!state.regular) {
@@ -89,6 +91,7 @@ if (!state.regular) {
 const saveSettings = () => LS.set('busEta.settings', state.settings);
 const saveRegular = () => LS.set('busEta.regular', state.regular);
 const saveTrip = () => LS.set('busEta.trip', state.trip);
+const saveSaved = () => { LS.set('busEta.savedTrips', state.saved); LS.set('busEta.loadedTrip', state.loadedId); };
 const isDemo = () => !state.settings.apiKey || state.settings.forceDemo || state.sessionDemo;
 const remainingStops = () => state.trip.stops.filter(s => !s.dropped);
 
@@ -127,6 +130,7 @@ function renderSetup() {
   }).join('') : '<div class="empty" style="width:100%">No saved stops yet.</div>';
   $('#btnManage').textContent = state.manage ? 'Done' : 'Edit list';
 
+  renderTrips();
   const b = $('#btnStart');
   b.disabled = active === 0;
   b.textContent = active ? `▶ START DRIVING  (${active} stop${active > 1 ? 's' : ''})` : '▶ ADD STOPS TO START';
@@ -184,10 +188,10 @@ function bindSetup() {
     if (b.dataset.act === 'delreg') { state.regular = state.regular.filter(x => x !== r); saveRegular(); renderSetup(); }
   });
   $('#btnManage').addEventListener('click', () => { state.manage = !state.manage; renderSetup(); });
-  $('#btnClearTrip').addEventListener('click', () => { state.trip = { stops: [], started: false, results: null }; saveTrip(); renderSetup(); });
+  $('#btnClearTrip').addEventListener('click', () => { state.trip = { stops: [], started: false, results: null }; state.loadedId = null; saveTrip(); saveSaved(); renderSetup(); });
   $('#btnDemoTrip').addEventListener('click', () => {
     state.trip = { stops: SAMPLE_STOPS.map(s => ({ id: uid(), name: s.name, query: s.name, lat: s.lat, lng: s.lng, dropped: false })), started: false, results: null };
-    saveTrip(); renderSetup();
+    state.loadedId = null; saveTrip(); saveSaved(); renderSetup();
   });
   $('#btnStart').addEventListener('click', startDrive);
   $('#btnSettings').addEventListener('click', openSettings);
@@ -213,6 +217,174 @@ function saveSettingsForm() {
   $('#settings').classList.add('hidden');
   renderSetup();
   if (!$('#drive').classList.contains('hidden')) startDrive();   // re-init drive with the new mode
+}
+
+/* ================================================================== SAVED TRIPS */
+const TRIP_FILE_APP = 'bus-eta-trips';
+const tripSig = stops => JSON.stringify(stops.map(s => [s.name, s.query || s.name, hasOwnDwell(s) ? +s.dwellMin : null]));
+const loadedTrip = () => state.saved.find(t => t.id === state.loadedId) || null;
+const nameKey = n => String(n).trim().toLowerCase();
+const findByName = (n, exceptId) => state.saved.find(t => nameKey(t.name) === nameKey(n) && t.id !== exceptId);
+function snapshotStops() {   // what a saved trip keeps for each stop: place + own stop time (if any)
+  return state.trip.stops.map(s => {
+    const o = { name: s.name, query: s.query || s.name, lat: s.lat ?? null, lng: s.lng ?? null };
+    if (hasOwnDwell(s)) o.dwellMin = +s.dwellMin;
+    return o;
+  });
+}
+function tripStatus() {
+  const stops = state.trip.stops, lt = loadedTrip();
+  if (!stops.length) return { kind: 'empty', text: lt ? 'No stops in the trip right now.' : 'No stops yet.' };
+  if (!lt) return { kind: 'new', text: 'Not saved yet' };
+  const same = tripSig(stops) === tripSig(lt.stops);
+  return same ? { kind: 'saved', text: '“' + lt.name + '” — saved' } : { kind: 'changed', text: '“' + lt.name + '” — changed since saving' };
+}
+function renderTrips() {
+  const st = tripStatus(), lt = loadedTrip(), has = state.trip.stops.length > 0;
+  const stEl = $('#tripStatus');
+  stEl.textContent = 'Current trip: ' + st.text; stEl.className = 'tripstatus ' + st.kind;
+  const save = $('#btnSaveTrip');
+  save.disabled = !has;
+  save.textContent = lt ? (st.kind === 'changed' ? '💾 Save changes' : '💾 Saved ✓') : '💾 Save trip';
+  save.classList.toggle('primary', !lt || st.kind === 'changed');
+  $('#btnSaveAs').classList.toggle('hidden', !lt);
+  $('#btnSaveAs').disabled = !has;
+  $('#btnReverse').disabled = state.trip.stops.length < 2;
+  $('#btnBackup').disabled = !state.saved.length;
+  $('#savedList').innerHTML = state.saved.length ? state.saved.map(t => `
+    <li data-tid="${t.id}" class="${t.id === state.loadedId ? 'loaded' : ''}">
+      <span class="tnm">${esc(t.name)}<small>${t.stops.length} stop${t.stops.length === 1 ? '' : 's'}${t.id === state.loadedId ? ' · loaded now' : ''}</small></span>
+      <button class="btn" data-tact="load">Load</button>
+      <button class="btn" data-tact="rename">Rename</button>
+      <button class="btn danger" data-tact="delete">Delete</button>
+    </li>`).join('') : '<li class="empty" style="display:block">No saved trips yet.<br>Add your stops, then tap “Save trip”.</li>';
+}
+/* Simple pop-up used for naming and confirming (works the same on iPad and Mac) */
+function ask(o) {
+  return new Promise(resolve => {
+    const box = $('#dlg'), inp = $('#dlgInput'), err = $('#dlgErr');
+    $('#dlgTitle').textContent = o.title; $('#dlgMsg').textContent = o.msg || '';
+    inp.classList.toggle('hidden', !o.input); inp.value = o.value || ''; err.textContent = '';
+    const ok = $('#dlgOk'), cancel = $('#dlgCancel');
+    ok.textContent = o.ok || 'OK'; ok.className = 'btn ' + (o.danger ? 'danger' : 'primary');
+    cancel.textContent = o.cancel || 'Cancel'; cancel.classList.toggle('hidden', o.cancel === false);
+    box.classList.remove('hidden');
+    if (o.input) setTimeout(() => { inp.focus(); inp.select(); }, 30);
+    const done = v => { box.classList.add('hidden'); ok.onclick = cancel.onclick = inp.onkeydown = null; resolve(v); };
+    const submit = () => {
+      if (!o.input) return done(true);
+      const v = inp.value.trim().slice(0, 40);
+      if (!v) { err.textContent = 'Type a name first.'; return; }
+      const bad = o.check && o.check(v); if (bad) { err.textContent = bad; return; }
+      done(v);
+    };
+    ok.onclick = submit; cancel.onclick = () => done(null);
+    inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } if (e.key === 'Escape') done(null); };
+  });
+}
+function toast(msg, kind) { const m = $('#tripMsg'); m.textContent = msg; m.className = 'msg ' + (kind || 'ok'); }
+async function saveTripAs() {
+  if (!state.trip.stops.length) return;
+  const lt = loadedTrip();
+  const name = await ask({ title: 'Save trip', msg: 'Give this trip a name, like Eastbound or Westbound.', input: true, ok: 'Save' });
+  if (!name) return;
+  const clash = findByName(name);
+  if (clash) {
+    const yes = await ask({ title: 'Replace “' + clash.name + '”?', msg: 'A saved trip with that name already exists. Replace it with the stops you have now?', ok: 'Replace', danger: true });
+    if (!yes) return;
+    clash.name = name; clash.stops = snapshotStops(); clash.savedAt = Date.now(); state.loadedId = clash.id;
+  } else {
+    const t = { id: uid(), name, stops: snapshotStops(), savedAt: Date.now() };
+    state.saved.push(t); state.loadedId = t.id;
+  }
+  saveSaved(); renderSetup(); toast('Saved “' + name + '”.');
+}
+function saveTripUpdate() {
+  const lt = loadedTrip();
+  if (!lt) return saveTripAs();
+  lt.stops = snapshotStops(); lt.savedAt = Date.now();
+  saveSaved(); renderSetup(); toast('Saved “' + lt.name + '”.');
+}
+async function loadSavedTrip(id) {
+  const t = state.saved.find(x => x.id === id); if (!t) return;
+  const stops = state.trip.stops, lt = loadedTrip();
+  const unsaved = stops.length && !(lt && tripSig(stops) === tripSig(lt.stops));
+  if (unsaved) {
+    const yes = await ask({ title: 'Replace current stops?', msg: 'The stops you have now are not saved' + (lt ? ' (changes to “' + lt.name + '”)' : '') + '. Loading “' + t.name + '” will replace them.', ok: 'Load “' + t.name + '”', danger: true });
+    if (!yes) return;
+  }
+  state.trip = { stops: t.stops.map(s => Object.assign({ id: uid(), dropped: false }, s)), started: false, results: null };
+  state.loadedId = t.id;
+  saveTrip(); saveSaved(); renderSetup(); toast('Loaded “' + t.name + '”.');
+}
+async function renameSavedTrip(id) {
+  const t = state.saved.find(x => x.id === id); if (!t) return;
+  const name = await ask({ title: 'Rename trip', msg: 'New name for “' + t.name + '”:', input: true, value: t.name, ok: 'Rename',
+    check: v => findByName(v, id) ? 'You already have a trip with that name.' : '' });
+  if (!name) return;
+  t.name = name; saveSaved(); renderSetup(); toast('Renamed to “' + name + '”.');
+}
+async function deleteSavedTrip(id) {
+  const t = state.saved.find(x => x.id === id); if (!t) return;
+  const yes = await ask({ title: 'Delete “' + t.name + '”?', msg: 'This removes the saved trip from this device. Your current stops are not changed.', ok: 'Delete', danger: true });
+  if (!yes) return;
+  state.saved = state.saved.filter(x => x !== t);
+  if (state.loadedId === id) state.loadedId = null;
+  saveSaved(); renderSetup(); toast('Deleted “' + t.name + '”.');
+}
+function reverseStops() {
+  if (state.trip.stops.length < 2) return;
+  state.trip.stops.reverse(); state.trip.results = null;
+  saveTrip(); renderSetup(); toast('Stops reversed. Tap “Save trip” (or “Save as new name”) to keep it.');
+}
+function exportTrips() {
+  if (!state.saved.length) return;
+  const data = { app: TRIP_FILE_APP, version: 1, exportedAt: new Date().toISOString(), trips: state.saved.map(t => ({ name: t.name, stops: t.stops })) };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = 'bus-eta-trips-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast('Backup file saved: ' + state.saved.length + ' trip' + (state.saved.length === 1 ? '' : 's') + '.');
+}
+function cleanImportedStop(s) {
+  if (!s || typeof s.name !== 'string' || !s.name.trim()) return null;
+  const o = { name: s.name.trim(), query: typeof s.query === 'string' && s.query ? s.query : s.name.trim(),
+    lat: isFinite(s.lat) && s.lat !== null ? +s.lat : null, lng: isFinite(s.lng) && s.lng !== null ? +s.lng : null };
+  if (hasOwnDwell(s)) o.dwellMin = Math.max(0, Math.min(MAX_STOP_MIN, Math.round(+s.dwellMin)));
+  return o;
+}
+async function importTripsFile(file) {
+  let data;
+  try { data = JSON.parse(await file.text()); } catch (e) { data = null; }
+  const list = data && data.app === TRIP_FILE_APP && Array.isArray(data.trips) ? data.trips : null;
+  const trips = (list || []).map(t => ({ name: String(t && t.name || '').trim().slice(0, 40), stops: ((t && t.stops) || []).map(cleanImportedStop).filter(Boolean) })).filter(t => t.name && t.stops.length);
+  if (!trips.length) { await ask({ title: 'Could not restore', msg: 'That file does not look like a Bus ETA trips backup, or it has no trips in it.', ok: 'OK', cancel: false }); return; }
+  const clashes = trips.filter(t => findByName(t.name));
+  const yes = await ask({ title: 'Restore ' + trips.length + ' trip' + (trips.length === 1 ? '' : 's') + '?',
+    msg: trips.map(t => t.name).join(', ') + (clashes.length ? '. Trips with the same name on this device (' + clashes.map(t => t.name).join(', ') + ') will be replaced.' : '.'), ok: 'Restore' });
+  if (!yes) return;
+  trips.forEach(t => {
+    const ex = findByName(t.name);
+    if (ex) { ex.name = t.name; ex.stops = t.stops; ex.savedAt = Date.now(); }
+    else state.saved.push({ id: uid(), name: t.name, stops: t.stops, savedAt: Date.now() });
+  });
+  saveSaved(); renderSetup(); toast('Restored ' + trips.length + ' trip' + (trips.length === 1 ? '' : 's') + '.');
+}
+function bindTrips() {
+  $('#btnSaveTrip').addEventListener('click', saveTripUpdate);
+  $('#btnSaveAs').addEventListener('click', saveTripAs);
+  $('#btnReverse').addEventListener('click', reverseStops);
+  $('#btnBackup').addEventListener('click', exportTrips);
+  $('#btnRestore').addEventListener('click', () => $('#restoreFile').click());
+  $('#restoreFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) importTripsFile(f); });
+  $('#savedList').addEventListener('click', e => {
+    const b = e.target.closest('[data-tact]'); if (!b) return;
+    const id = b.closest('li').dataset.tid;
+    if (b.dataset.tact === 'load') loadSavedTrip(id);
+    if (b.dataset.tact === 'rename') renameSavedTrip(id);
+    if (b.dataset.tact === 'delete') deleteSavedTrip(id);
+  });
 }
 
 /* ---------------- per-stop time editor (used on both screens) ---------------- */
@@ -770,7 +942,7 @@ function releaseWake() { try { D.wake && D.wake.release(); } catch (e) { } D.wak
 
 /* ================================================================== BOOT */
 function boot() {
-  bindSetup(); bindDrive(); bindDwell();
+  bindSetup(); bindDrive(); bindDwell(); bindTrips();
   renderSetup();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { });
   const q = new URLSearchParams(location.search);

@@ -29,11 +29,30 @@
       <p class="hint">Stops in driving order. Use ▲ ▼ to reorder. Tap “Stop time” to change how long you stay at one stop.</p>
       <ol id="tripList" class="trip-list"></ol>
       <div class="row">
+        <button id="btnReverse" class="btn ghost">⇅ Reverse order</button>
         <button id="btnClearTrip" class="btn ghost">Clear trip</button>
         <button id="btnDemoTrip" class="btn ghost hidden">Load demo trip</button>
       </div>
     </div>
 
+    <div class="col">
+    <div class="panel trips">
+      <h2>Trips</h2>
+      <div id="tripStatus" class="tripstatus"></div>
+      <div class="row">
+        <button id="btnSaveTrip" class="btn primary">💾 Save trip</button>
+        <button id="btnSaveAs" class="btn ghost hidden">Save as new name…</button>
+      </div>
+      <div id="tripMsg" class="msg" role="status"></div>
+      <h3>Saved trips on this device</h3>
+      <ul id="savedList" class="saved-list"></ul>
+      <div class="row">
+        <button id="btnBackup" class="btn ghost">⬇ Back up trips</button>
+        <button id="btnRestore" class="btn ghost">⬆ Restore from file</button>
+        <input id="restoreFile" type="file" accept=".json,application/json" class="hidden">
+      </div>
+      <p class="hint">Back up makes a file you can open on another device (Mac → iPad) with Restore.</p>
+    </div>
     <div class="panel">
       <h2>Regular stops <button id="btnManage" class="btn small ghost">Edit list</button></h2>
       <p class="hint">Tap a stop to add it to today's trip.</p>
@@ -46,6 +65,7 @@
         <button id="btnAdd" class="btn primary" type="submit">＋ Add to today's trip</button>
         <div id="addMsg" class="msg" role="status"></div>
       </form>
+    </div>
     </div>
   </div>
 
@@ -138,6 +158,20 @@
       <button id="dwellSave" class="btn primary">Save</button>
       <button id="dwellStd" class="btn ghost">Use standard</button>
       <button id="dwellCancel" class="btn ghost">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ NAME / CONFIRM POP-UP ============ -->
+<div id="dlg" class="overlay hidden">
+  <div class="modal">
+    <h2 id="dlgTitle"></h2>
+    <p id="dlgMsg" class="hint" style="font-size:19px"></p>
+    <input id="dlgInput" type="text" maxlength="40" autocomplete="off" autocapitalize="words" enterkeyhint="done">
+    <div id="dlgErr" class="msg err"></div>
+    <div class="row">
+      <button id="dlgOk" class="btn primary">OK</button>
+      <button id="dlgCancel" class="btn ghost">Cancel</button>
     </div>
   </div>
 </div>

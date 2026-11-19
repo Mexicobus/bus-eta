@@ -115,6 +115,21 @@ input:focus{outline:3px solid var(--blue);border-color:var(--blue)}
 .done-box button{min-height:42px;font-size:16px;padding:0 12px;border-radius:21px;color:var(--text)}
 .alldone{font-size:34px;text-align:center;padding:30px;color:var(--green);font-weight:800}
 
+/* ---- saved trips ---- */
+.col{min-height:0;overflow:auto;display:flex;flex-direction:column;gap:16px}
+.col>.panel{overflow:visible;flex:none}
+.panel h3{margin:14px 0 8px;font-size:19px;color:var(--dim);font-weight:700}
+.tripstatus{font-size:20px;font-weight:700;padding:10px 14px;border-radius:12px;border:2px solid var(--line);margin-bottom:10px;color:var(--dim)}
+.tripstatus.saved{color:var(--green);border-color:#1f6b3f}
+.tripstatus.changed{color:#1a1200;background:var(--accent);border-color:var(--accent)}
+.saved-list{list-style:none;padding:0;margin:0 0 12px;display:flex;flex-direction:column;gap:8px}
+.saved-list li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--card);border:2px solid var(--line);border-radius:14px;padding:8px 10px}
+.saved-list li.loaded{border-color:var(--green)}
+.saved-list .tnm{flex:1 1 140px;min-width:0;font-size:22px;font-weight:700;overflow:hidden;text-overflow:ellipsis}
+.saved-list .tnm small{display:block;color:var(--dim);font-size:15px;font-weight:500}
+.saved-list .btn{min-height:52px;font-size:18px;padding:0 16px}
+.trips .row .btn{min-height:56px}
+
 /* ---- per-stop time chip ---- */
 .dwellchip{font:inherit;font-weight:700;font-size:17px;min-height:44px;padding:0 14px;border-radius:22px;border:2px solid var(--line);background:#0b1118;color:var(--dim);cursor:pointer;touch-action:manipulation;white-space:nowrap;flex:none}
 .trip-list .nm .dwellchip small,.dwellchip small{display:inline;color:inherit;opacity:.8;font-size:14px;font-weight:500}
