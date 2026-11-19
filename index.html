@@ -24,48 +24,47 @@
   </header>
 
   <div class="setup-grid">
-    <div class="panel">
-      <h2>Today's trip <span id="tripCount" class="count"></span></h2>
-      <p class="hint">Stops in driving order. Use ▲ ▼ to reorder. Tap “Stop time” to change how long you stay at one stop.</p>
-      <ol id="tripList" class="trip-list"></ol>
-      <div class="row">
-        <button id="btnReverse" class="btn ghost">⇅ Reverse order</button>
-        <button id="btnClearTrip" class="btn ghost">Clear trip</button>
-        <button id="btnDemoTrip" class="btn ghost hidden">Load demo trip</button>
+    <div class="col">
+      <div class="panel addpanel">
+        <h2>Add a stop</h2>
+        <form id="addForm" autocomplete="off">
+          <div class="addrow">
+            <input id="newStop" type="text" placeholder="City or address, e.g. Amarillo, TX" enterkeyhint="done" autocapitalize="words" aria-label="City or address">
+            <button id="btnAdd" class="btn primary" type="submit">＋ Add stop</button>
+          </div>
+          <div id="addMsg" class="msg" role="status"></div>
+        </form>
+      </div>
+
+      <div class="panel triplist">
+        <h2>Today's trip <span id="tripCount" class="count"></span></h2>
+        <ol id="tripList" class="trip-list"></ol>
+        <div class="row">
+          <button id="btnReverse" class="btn ghost">⇅ Reverse order</button>
+          <button id="btnClearTrip" class="btn ghost">Clear trip</button>
+          <button id="btnDemoTrip" class="btn ghost hidden">Load demo trip</button>
+        </div>
       </div>
     </div>
 
     <div class="col">
-    <div class="panel trips">
-      <h2>Trips</h2>
-      <div id="tripStatus" class="tripstatus"></div>
-      <div class="row">
-        <button id="btnSaveTrip" class="btn primary">💾 Save trip</button>
-        <button id="btnSaveAs" class="btn ghost hidden">Save as new name…</button>
+      <div class="panel trips compact">
+        <h2>Trips</h2>
+        <div id="tripStatus" class="tripstatus"></div>
+        <div class="row">
+          <button id="btnSaveTrip" class="btn primary">💾 Save trip</button>
+          <button id="btnSaveAs" class="btn ghost hidden">Save as new name…</button>
+        </div>
+        <div id="tripMsg" class="msg" role="status"></div>
+        <h3>Saved trips on this device</h3>
+        <ul id="savedList" class="saved-list"></ul>
+        <div class="row">
+          <button id="btnBackup" class="btn ghost">⬇ Back up trips</button>
+          <button id="btnRestore" class="btn ghost">⬆ Restore from file</button>
+          <input id="restoreFile" type="file" accept=".json,application/json" class="hidden">
+        </div>
+        <p class="hint">Back up makes a file you can open on another device (Mac → iPad) with Restore.</p>
       </div>
-      <div id="tripMsg" class="msg" role="status"></div>
-      <h3>Saved trips on this device</h3>
-      <ul id="savedList" class="saved-list"></ul>
-      <div class="row">
-        <button id="btnBackup" class="btn ghost">⬇ Back up trips</button>
-        <button id="btnRestore" class="btn ghost">⬆ Restore from file</button>
-        <input id="restoreFile" type="file" accept=".json,application/json" class="hidden">
-      </div>
-      <p class="hint">Back up makes a file you can open on another device (Mac → iPad) with Restore.</p>
-    </div>
-    <div class="panel">
-      <h2>Regular stops <button id="btnManage" class="btn small ghost">Edit list</button></h2>
-      <p class="hint">Tap a stop to add it to today's trip.</p>
-      <div id="regList" class="reg-list"></div>
-
-      <h2 class="mt">Add a new stop</h2>
-      <form id="addForm" autocomplete="off">
-        <input id="newStop" type="text" placeholder="City or address, e.g. Amarillo, TX" enterkeyhint="done" autocapitalize="words">
-        <label class="check"><input id="saveReg" type="checkbox"> <span>Also save as a regular stop</span></label>
-        <button id="btnAdd" class="btn primary" type="submit">＋ Add to today's trip</button>
-        <div id="addMsg" class="msg" role="status"></div>
-      </form>
-    </div>
     </div>
   </div>
 

@@ -148,19 +148,12 @@ const SAMPLE_STOPS = [
 ];
 const state = {
   settings: Object.assign({ apiKey: '', dwellMin: 10, speedPct: 100, forceDemo: false, demoSpeed: 300, updateMin: 5 }, LS.get('busEta.settings', {})),
-  regular: LS.get('busEta.regular', null),
   trip: LS.get('busEta.trip', { stops: [], started: false, results: null }),
-  manage: false,
   saved: LS.get('busEta.savedTrips', []),        // named trips on this device
   loadedId: LS.get('busEta.loadedTrip', null),   // which saved trip the current stops came from
   sessionDemo: false   // set if Google rejects the key during this session
 };
-if (!state.regular) {
-  state.regular = SAMPLE_STOPS.map(s => ({ id: uid(), name: s.name, query: s.name, lat: s.lat, lng: s.lng }));
-  LS.set('busEta.regular', state.regular);
-}
 const saveSettings = () => LS.set('busEta.settings', state.settings);
-const saveRegular = () => LS.set('busEta.regular', state.regular);
 const saveTrip = () => LS.set('busEta.trip', state.trip);
 const saveSaved = () => { LS.set('busEta.savedTrips', state.saved); LS.set('busEta.loadedTrip', state.loadedId); };
 const isDemo = () => !state.settings.apiKey || state.settings.forceDemo || state.sessionDemo;
@@ -190,17 +183,7 @@ function renderSetup() {
       <button class="btn" data-act="up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
       <button class="btn" data-act="down" aria-label="Move down" ${i === stops.length - 1 ? 'disabled' : ''}>▼</button>
       <button class="btn danger" data-act="rm" aria-label="Remove">✕</button>
-    </li>`).join('') : '<li class="empty" style="display:block">No stops yet.<br>Tap a regular stop or type a new one.</li>';
-
-  const inTrip = new Set(stops.map(s => s.name.toLowerCase()));
-  $('#regList').innerHTML = state.regular.length ? state.regular.map(r => {
-    const inT = inTrip.has(r.name.toLowerCase());
-    return `<div class="reg-wrap" data-id="${r.id}">
-      <button class="btn reg ${inT ? 'in' : ''}" data-act="addreg">${inT ? '✓ ' : '＋ '}${esc(r.name)}</button>
-      ${state.manage ? '<button class="btn reg-edit" data-act="editreg" aria-label="Edit ' + esc(r.name) + '">✎ Edit</button><button class="btn reg-del danger" data-act="delreg" aria-label="Delete">✕</button>' : ''}
-    </div>`;
-  }).join('') : '<div class="empty" style="width:100%">No saved stops yet.</div>';
-  $('#btnManage').textContent = state.manage ? 'Done' : 'Edit list';
+    </li>`).join('') : '<li class="empty" style="display:block">No stops yet.<br>Type a city or address in “Add a stop” above.</li>';
 
   renderTrips();
   const b = $('#btnStart');
@@ -225,7 +208,6 @@ async function onAddSubmit(e) {
   e.preventDefault();
   const q = $('#newStop').value.trim();
   if (!q) { setMsg('Type a city or address first.', 'err'); return; }
-  const save = $('#saveReg').checked;
   const entry = { name: q, query: q, lat: null, lng: null };
   if (isDemo()) {
     setMsg('Looking up place…');
@@ -236,11 +218,8 @@ async function onAddSubmit(e) {
     } catch (err) { setMsg("Demo mode needs internet to look up new places.", 'err'); return; }
   }
   addToTrip(entry);
-  if (save && !state.regular.some(r => r.name.toLowerCase() === q.toLowerCase())) {
-    state.regular.push({ id: uid(), ...entry }); saveRegular(); renderSetup();
-  }
-  $('#newStop').value = ''; $('#saveReg').checked = false;
-  setMsg(`Added “${q}”${save ? ' and saved as regular' : ''}.`, 'ok');
+  $('#newStop').value = '';
+  setMsg(`Added “${q}”.`, 'ok');
 }
 function bindSetup() {
   $('#addForm').addEventListener('submit', onAddSubmit);
@@ -254,14 +233,6 @@ function bindSetup() {
     if (b.dataset.act === 'down' && i < st.length - 1) [st[i + 1], st[i]] = [st[i], st[i + 1]];
     state.trip.results = null; saveTrip(); renderSetup();
   });
-  $('#regList').addEventListener('click', e => {
-    const b = e.target.closest('button[data-act]'); if (!b) return;
-    const r = state.regular.find(x => x.id === b.closest('.reg-wrap').dataset.id); if (!r) return;
-    if (b.dataset.act === 'addreg') { addToTrip(r); setMsg(`Added “${r.name}”.`, 'ok'); }
-    if (b.dataset.act === 'editreg') editStopText(r, true);
-    if (b.dataset.act === 'delreg') { state.regular = state.regular.filter(x => x !== r); saveRegular(); renderSetup(); }
-  });
-  $('#btnManage').addEventListener('click', () => { state.manage = !state.manage; renderSetup(); });
   $('#btnClearTrip').addEventListener('click', () => { state.trip = { stops: [], started: false, results: null }; state.loadedId = null; saveTrip(); saveSaved(); renderSetup(); });
   $('#btnDemoTrip').addEventListener('click', () => {
     state.trip = { stops: SAMPLE_STOPS.map(s => ({ id: uid(), name: s.name, query: s.name, lat: s.lat, lng: s.lng, dropped: false })), started: false, results: null };
@@ -295,8 +266,8 @@ function saveSettingsForm() {
   if (!$('#drive').classList.contains('hidden')) startDrive();   // re-init drive with the new mode
 }
 
-/* ---------------- edit a stop's text (trip stops and regular stops) ---------------- */
-async function editStopText(stop, isRegular) {
+/* ---------------- edit a stop's text ---------------- */
+async function editStopText(stop) {
   if (!stop) return;
   const name = await ask({
     title: 'Edit stop', msg: 'Change the name or address. ' + (isDemo() ? 'The place will be looked up again.' : 'Google will look the place up again.'),
@@ -315,8 +286,7 @@ async function editStopText(stop, isRegular) {
   stop.name = name; stop.query = name;
   stop.lat = g ? g.lat : null; stop.lng = g ? g.lng : null;   // live mode: Google looks the text up
   delete stop.tz; delete stop.tzAt;
-  if (isRegular) { saveRegular(); }
-  else { state.trip.results = null; saveTrip(); }
+  state.trip.results = null; saveTrip();
   renderSetup(); toast('Updated “' + name + '”.');
 }
 let pendingGeo = null;
@@ -847,12 +817,10 @@ function computeLive() {
       legs.forEach((leg, i) => {
         const s = rem[i]; if (!s) return;
         if (leg.end) { s.lat = leg.end.lat; s.lng = leg.end.lng; }
-        const rg = state.regular.find(r => r.name.toLowerCase() === s.name.toLowerCase());
-        if (rg && rg.lat == null) { rg.lat = s.lat; rg.lng = s.lng; }
       });
       const path = res.path;
       D.results = { updatedAt: now, source: 'live', etas, path };
-      state.trip.results = D.results; saveTrip(); saveRegular();
+      state.trip.results = D.results; saveTrip();
       showErr(null);
       D.map && D.map.setRoute(path);
       refreshMap(D.fitMode === 'all' || !D.fitted); D.fitted = true;
