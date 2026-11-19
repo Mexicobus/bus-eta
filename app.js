@@ -114,7 +114,7 @@ function renderSetup() {
   $('#tripList').innerHTML = stops.length ? stops.map((s, i) => `
     <li data-id="${s.id}" class="${s.dropped ? 'dropped' : ''}">
       <span class="num">${i + 1}</span>
-      <span class="nm">${esc(s.name)}${s.dropped ? '<small>already dropped off</small>' : `<button class="dwellchip ${hasOwnDwell(s) ? 'custom' : ''}" data-act="dwell" aria-label="Change stop time for ${esc(s.name)}">⏱ Stop time: ${fmtMin(stopDwellMin(s, state.settings.dwellMin))}${hasOwnDwell(s) ? '' : ' <small>(standard)</small>'}</button>`}</span>
+      <span class="nm">${esc(s.name)}${s.dropped ? '<small>already dropped off</small>' : `<span class="chiprow"><button class="dwellchip ${hasOwnDwell(s) ? 'custom' : ''}" data-act="dwell" aria-label="Change stop time for ${esc(s.name)}">⏱ Stop time: ${fmtMin(stopDwellMin(s, state.settings.dwellMin))}${hasOwnDwell(s) ? '' : ' <small>(standard)</small>'}</button><button class="dwellchip editchip" data-act="edit" aria-label="Edit the text of ${esc(s.name)}">✎ Edit</button></span>`}</span>
       <button class="btn" data-act="up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
       <button class="btn" data-act="down" aria-label="Move down" ${i === stops.length - 1 ? 'disabled' : ''}>▼</button>
       <button class="btn danger" data-act="rm" aria-label="Remove">✕</button>
@@ -125,7 +125,7 @@ function renderSetup() {
     const inT = inTrip.has(r.name.toLowerCase());
     return `<div class="reg-wrap" data-id="${r.id}">
       <button class="btn reg ${inT ? 'in' : ''}" data-act="addreg">${inT ? '✓ ' : '＋ '}${esc(r.name)}</button>
-      ${state.manage ? '<button class="btn reg-del danger" data-act="delreg" aria-label="Delete">✕</button>' : ''}
+      ${state.manage ? '<button class="btn reg-edit" data-act="editreg" aria-label="Edit ' + esc(r.name) + '">✎ Edit</button><button class="btn reg-del danger" data-act="delreg" aria-label="Delete">✕</button>' : ''}
     </div>`;
   }).join('') : '<div class="empty" style="width:100%">No saved stops yet.</div>';
   $('#btnManage').textContent = state.manage ? 'Done' : 'Edit list';
@@ -176,6 +176,7 @@ function bindSetup() {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const id = b.closest('li').dataset.id, st = state.trip.stops, i = st.findIndex(s => s.id === id);
     if (b.dataset.act === 'dwell') { openDwell(id); return; }
+    if (b.dataset.act === 'edit') { editStopText(state.trip.stops[i]); return; }
     if (b.dataset.act === 'rm') st.splice(i, 1);
     if (b.dataset.act === 'up' && i > 0) [st[i - 1], st[i]] = [st[i], st[i - 1]];
     if (b.dataset.act === 'down' && i < st.length - 1) [st[i + 1], st[i]] = [st[i], st[i + 1]];
@@ -185,6 +186,7 @@ function bindSetup() {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const r = state.regular.find(x => x.id === b.closest('.reg-wrap').dataset.id); if (!r) return;
     if (b.dataset.act === 'addreg') { addToTrip(r); setMsg(`Added “${r.name}”.`, 'ok'); }
+    if (b.dataset.act === 'editreg') editStopText(r, true);
     if (b.dataset.act === 'delreg') { state.regular = state.regular.filter(x => x !== r); saveRegular(); renderSetup(); }
   });
   $('#btnManage').addEventListener('click', () => { state.manage = !state.manage; renderSetup(); });
@@ -218,6 +220,31 @@ function saveSettingsForm() {
   renderSetup();
   if (!$('#drive').classList.contains('hidden')) startDrive();   // re-init drive with the new mode
 }
+
+/* ---------------- edit a stop's text (trip stops and regular stops) ---------------- */
+async function editStopText(stop, isRegular) {
+  if (!stop) return;
+  const name = await ask({
+    title: 'Edit stop', msg: 'Change the name or address. ' + (isDemo() ? 'The place will be looked up again.' : 'Google will look the place up again.'),
+    input: true, value: stop.name, max: 150, ok: 'Save', empty: 'The stop can’t be empty — type a place or address.',
+    check: async v => {
+      if (!isDemo()) return '';
+      try {
+        const g = await geocodeDemo(v);
+        if (!g) return 'Couldn’t find that place. Try “City, ST”.';
+        pendingGeo = g; return '';
+      } catch (e) { return 'Demo mode needs internet to look up places.'; }
+    }
+  });
+  if (!name) { pendingGeo = null; return; }
+  const g = pendingGeo; pendingGeo = null;
+  stop.name = name; stop.query = name;
+  stop.lat = g ? g.lat : null; stop.lng = g ? g.lng : null;   // live mode: Google looks the text up
+  if (isRegular) { saveRegular(); }
+  else { state.trip.results = null; saveTrip(); }
+  renderSetup(); toast('Updated “' + name + '”.');
+}
+let pendingGeo = null;
 
 /* ================================================================== SAVED TRIPS */
 const TRIP_FILE_APP = 'bus-eta-trips';
@@ -264,7 +291,7 @@ function ask(o) {
   return new Promise(resolve => {
     const box = $('#dlg'), inp = $('#dlgInput'), err = $('#dlgErr');
     $('#dlgTitle').textContent = o.title; $('#dlgMsg').textContent = o.msg || '';
-    inp.classList.toggle('hidden', !o.input); inp.value = o.value || ''; err.textContent = '';
+    inp.classList.toggle('hidden', !o.input); inp.maxLength = o.max || 40; inp.value = o.value || ''; err.textContent = ''; $('#dlgOk').disabled = false;
     const ok = $('#dlgOk'), cancel = $('#dlgCancel');
     ok.textContent = o.ok || 'OK'; ok.className = 'btn ' + (o.danger ? 'danger' : 'primary');
     cancel.textContent = o.cancel || 'Cancel'; cancel.classList.toggle('hidden', o.cancel === false);
@@ -273,10 +300,12 @@ function ask(o) {
     const done = v => { box.classList.add('hidden'); ok.onclick = cancel.onclick = inp.onkeydown = null; resolve(v); };
     const submit = () => {
       if (!o.input) return done(true);
-      const v = inp.value.trim().slice(0, 40);
-      if (!v) { err.textContent = 'Type a name first.'; return; }
-      const bad = o.check && o.check(v); if (bad) { err.textContent = bad; return; }
-      done(v);
+      const v = inp.value.trim().slice(0, o.max || 40);
+      if (!v) { err.textContent = o.empty || 'Type a name first.'; return; }
+      if (!o.check) return done(v);
+      ok.disabled = true; err.textContent = 'Checking…';
+      Promise.resolve(o.check(v)).then(bad => { ok.disabled = false; if (bad) { err.textContent = bad; return; } err.textContent = ''; done(v); },
+        () => { ok.disabled = false; err.textContent = 'Something went wrong. Try again.'; });
     };
     ok.onclick = submit; cancel.onclick = () => done(null);
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } if (e.key === 'Escape') done(null); };

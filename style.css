@@ -130,6 +130,12 @@ input:focus{outline:3px solid var(--blue);border-color:var(--blue)}
 .saved-list .btn{min-height:52px;font-size:18px;padding:0 16px}
 .trips .row .btn{min-height:56px}
 
+/* ---- edit stop ---- */
+.trip-list .nm .chiprow{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.trip-list .nm .chiprow .dwellchip{margin-top:0}
+.editchip{color:var(--text)}
+.reg-edit{min-height:58px;padding:0 14px;font-size:18px}
+
 /* ---- per-stop time chip ---- */
 .dwellchip{font:inherit;font-weight:700;font-size:17px;min-height:44px;padding:0 14px;border-radius:22px;border:2px solid var(--line);background:#0b1118;color:var(--dim);cursor:pointer;touch-action:manipulation;white-space:nowrap;flex:none}
 .trip-list .nm .dwellchip small,.dwellchip small{display:inline;color:inherit;opacity:.8;font-size:14px;font-weight:500}
