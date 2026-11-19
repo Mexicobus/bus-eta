@@ -99,6 +99,7 @@ const remainingStops = () => state.trip.stops.filter(s => !s.dropped);
 function show(name) {
   $('#setup').classList.toggle('hidden', name !== 'setup');
   $('#drive').classList.toggle('hidden', name !== 'drive');
+  $('#preview').classList.toggle('hidden', name !== 'preview');
 }
 
 /* ================================================================== SETUP */
@@ -132,7 +133,7 @@ function renderSetup() {
 
   renderTrips();
   const b = $('#btnStart');
-  b.disabled = active === 0;
+  b.disabled = active === 0; $('#btnPreview').disabled = active === 0;
   b.textContent = active ? `▶ START DRIVING  (${active} stop${active > 1 ? 's' : ''})` : '▶ ADD STOPS TO START';
 }
 function setMsg(text, kind) { const m = $('#addMsg'); m.textContent = text || ''; m.className = 'msg ' + (kind || ''); }
@@ -517,6 +518,7 @@ const GOOGLE_DARK = [
 ];
 class GoogleMap {
   constructor(el) {
+    this.el = el;
     this.map = new google.maps.Map(el, { center: { lat: 38, lng: -98 }, zoom: 5, styles: GOOGLE_DARK, disableDefaultUI: true, zoomControl: true, gestureHandling: 'greedy', clickableIcons: false });
     this.markers = []; this.line = null; this.bus = null;
   }
@@ -552,7 +554,7 @@ class GoogleMap {
     google.maps.event.addListenerOnce(this.map, 'idle', () => { if (this.map.getZoom() > 11) this.map.setZoom(11); });
   }
   resize() { google.maps.event.trigger(this.map, 'resize'); }
-  destroy() { this.markers.forEach(m => m.setMap(null)); $('#map').innerHTML = ''; }
+  destroy() { this.markers.forEach(m => m.setMap(null)); if (this.line) this.line.setMap(null); this.el.innerHTML = ''; }
 }
 
 let googlePromise = null, googleKeyLoaded = null;
@@ -648,6 +650,7 @@ async function initLive(session) {
   D.timers.push(setInterval(() => maybeRefresh(false), 5000));
 }
 function onGoogleAuthFailure() {
+  if (!$('#preview').classList.contains('hidden')) { runPreview('Google rejected the API key — showing a demo estimate instead. Check the key in ⚙ Settings.'); return; }
   showErr('Google rejected the API key — switched to DEMO data. Check the key in ⚙ Settings (setup screen).');
   if (state.trip.started && !$('#drive').classList.contains('hidden')) startDrive();
   setTimeout(() => showErr('Google rejected the API key — showing DEMO data. Check the key in Settings.'), 300);
@@ -670,6 +673,17 @@ function maybeRefresh(force, moved) {
   if (D.mode !== 'live' || !D.svc || D.inflight) return;
   const since = Date.now() - D.lastCompute;
   if (force || since >= 60000 || (moved && since >= 20000)) computeLive();
+}
+function dirErrMsg(st, willRetry) {   // plain-words Google route errors (live driving + preview)
+  const msgs = {
+    REQUEST_DENIED: 'Google denied the request — enable the Directions API for this key.',
+    OVER_QUERY_LIMIT: 'Google usage limit hit' + (willRetry ? ' — will retry.' : ' — try again in a minute.'),
+    ZERO_RESULTS: 'Google found no driving route to one of the stops.',
+    NOT_FOUND: 'Google could not find one of the stop addresses.',
+    MAX_WAYPOINTS_EXCEEDED: 'Too many stops for one route.',
+    UNKNOWN_ERROR: 'Google had a temporary error' + (willRetry ? ' — will retry.' : ' — try again.')
+  };
+  return msgs[st] || 'Route update failed (' + st + ')';
 }
 function computeLive() {
   const rem = remainingStops();
@@ -711,15 +725,7 @@ function computeLive() {
     })
     .catch(st => {
       if (session !== D.token) return;
-      const msgs = {
-        REQUEST_DENIED: 'Google denied the request — enable the Directions API for this key.',
-        OVER_QUERY_LIMIT: 'Google usage limit hit — will retry.',
-        ZERO_RESULTS: 'Google found no driving route to one of the stops.',
-        NOT_FOUND: 'Google could not find one of the stop addresses.',
-        MAX_WAYPOINTS_EXCEEDED: 'Too many stops for one route.',
-        UNKNOWN_ERROR: 'Google had a temporary error — will retry.'
-      };
-      showErr((msgs[st] || 'Route update failed (' + st + ')') + ' Showing last ETAs.');
+      showErr(dirErrMsg(st, true) + ' Showing last ETAs.');
     })
     .finally(() => { D.inflight = false; });
 }
@@ -969,14 +975,183 @@ async function acquireWake() {
 }
 function releaseWake() { try { D.wake && D.wake.release(); } catch (e) { } D.wake = null; }
 
+/* ================================================================== PREVIEW (plan a trip without driving) */
+const P = { map: null, token: 0, plan: null, busy: false, myPos: null, mapsUrl: '' };
+const MAPS_URL_MAX_WAYPOINTS = 9;
+const pvPrefs = () => Object.assign({ from: 'San Diego, CA' }, LS.get('busEta.preview', {}));
+const localInputValue = d => { const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); };
+
+/* Turn drive legs into a timetable. legT = seconds per leg, legD = meters per leg (one leg per stop, in order).
+   Each stop's own wait delays the NEXT stop only; the final stop's wait is not counted. */
+function buildPreviewPlan(depMs, legT, legD, stops, standard) {
+  const rows = []; let t = depMs, miles = 0, drive = 0, wait = 0;
+  stops.forEach((s, i) => {
+    const arrive = t + legT[i] * 1000, last = i === stops.length - 1;
+    const dwell = last ? 0 : stopDwellMin(s, standard) * 60;
+    rows.push({ id: s.id, name: s.name, driveSec: legT[i], meters: legD[i], arrive, dwellMin: stopDwellMin(s, standard), leave: last ? null : arrive + dwell * 1000, last });
+    t = arrive + dwell * 1000; miles += legD[i] / M_PER_MI; drive += legT[i]; wait += dwell;
+  });
+  const final = rows.length ? rows[rows.length - 1].arrive : depMs;
+  return { depMs, rows, totalMiles: miles, driveSec: drive, stopSec: wait, finalArrival: final, tripSec: (final - depMs) / 1000 };
+}
+function pvOriginText() { return $('#pvFrom').value.trim(); }
+function openPreview() {
+  const stops = remainingStops(); if (!stops.length) return;
+  const pr = pvPrefs();
+  $('#pvFrom').value = pr.from || 'San Diego, CA';
+  $('#pvWhen').value = localInputValue(new Date());
+  show('preview');
+  runPreview();
+}
+function closePreview() {
+  P.token++; P.busy = false;
+  if (P.map) { try { P.map.destroy(); } catch (e) { } P.map = null; }
+  show('setup'); renderSetup();
+}
+function pvMyLocation() {
+  return new Promise((res, rej) => {
+    if (!navigator.geolocation) return rej(new Error('This device has no location access.'));
+    navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      e => rej(new Error(e.code === 1 ? 'Location is turned off for this site. Allow it in Safari settings, or type a starting place.' : 'Couldn’t get your location. Type a starting place instead.')),
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
+  });
+}
+function pvSetError(t) { const b = $('#pvErr'); b.textContent = t || ''; b.classList.toggle('hidden', !t); }
+function pvSetBusy(on, text) { P.busy = on; $('#pvBusy').textContent = text || ''; $('#pvBusy').classList.toggle('hidden', !on); $('#btnPvUpdate').disabled = on; }
+async function runPreview(notice) {
+  const mine = ++P.token, stops = remainingStops();
+  if (!stops.length) return;
+  let from = pvOriginText();
+  if (!from) { pvSetError('Type where the trip starts, or tap “Use my location”.'); return; }
+  const depPicked = $('#pvWhen').value ? new Date($('#pvWhen').value) : new Date();
+  if (isNaN(depPicked)) { pvSetError('Pick a start date and time.'); return; }
+  const dep = new Date(Math.max(depPicked.getTime(), Date.now()));   // Google can't plan a start in the past
+  LS.set('busEta.preview', { from });
+  if (P.map && (P.map instanceof LeafletMap) !== !!(isDemo() || notice)) { try { P.map.destroy(); } catch (e) { } P.map = null; }
+  pvSetError(notice || null); pvSetBusy(true, 'Planning the route…');
+  $('#pvList').innerHTML = ''; $('#pvSummary').innerHTML = ''; P.plan = null;
+  try {
+    let origin = null;
+    if (from.toLowerCase() === 'my location') {
+      pvSetBusy(true, 'Finding your location…');
+      origin = await pvMyLocation(); if (mine !== P.token) return;
+    }
+    const r = (isDemo() || notice) ? await pvDemo(stops, from, origin, dep.getTime(), mine) : await pvLive(stops, from, origin, dep, mine);
+    if (mine !== P.token || !r) return;
+    P.plan = r.plan; P.mapsUrl = pvMapsUrl(from, origin, stops);
+    renderPreview(r, stops, from, origin);
+  } catch (e) {
+    if (mine !== P.token) return;
+    pvSetError(typeof e === 'string' ? dirErrMsg(e, false) : (e && e.message) || 'Something went wrong. Try again.');
+  } finally { if (mine === P.token) pvSetBusy(false); }
+}
+async function pvLive(stops, from, origin, dep, mine) {
+  try { await loadGoogle(state.settings.apiKey); }
+  catch (e) { if (D.authFailed) return null; throw new Error('Can’t reach Google Maps (no signal?). Check your connection and tap Update preview.'); }
+  if (mine !== P.token) return null;
+  if (!P.map) P.map = new GoogleMap($('#pvMap'));
+  const svc = new google.maps.DirectionsService();
+  const loc = s => s.lat != null ? new google.maps.LatLng(s.lat, s.lng) : (s.query || s.name);
+  const req = {
+    origin: origin ? new google.maps.LatLng(origin.lat, origin.lng) : from,
+    destination: loc(stops[stops.length - 1]),
+    waypoints: stops.slice(0, -1).map(s => ({ location: loc(s), stopover: true })),
+    optimizeWaypoints: false, travelMode: google.maps.TravelMode.DRIVING,
+    drivingOptions: { departureTime: dep, trafficModel: google.maps.TrafficModel.BEST_GUESS },
+    unitSystem: google.maps.UnitSystem.IMPERIAL
+  };
+  const res = await new Promise((ok, bad) => svc.route(req, (r, st) => st === 'OK' ? ok(r) : bad(st)));
+  if (mine !== P.token) return null;
+  const f = state.settings.speedPct / 100, legs = res.routes[0].legs;
+  const legT = legs.map(l => ((l.duration_in_traffic || l.duration).value) * f), legD = legs.map(l => l.distance.value);
+  const pts = stops.map((s, i) => legs[i] ? { id: s.id, name: s.name, lat: legs[i].end_location.lat(), lng: legs[i].end_location.lng() } : null).filter(Boolean);
+  const startPt = legs[0] && legs[0].start_location ? { lat: legs[0].start_location.lat(), lng: legs[0].start_location.lng() } : (origin || null);
+  return { plan: buildPreviewPlan(dep.getTime(), legT, legD, stops.slice(0, legs.length), state.settings.dwellMin), path: res.routes[0].overview_path.map(p => [p.lat(), p.lng()]), pts, startPt, source: 'google' };
+}
+async function pvDemo(stops, from, origin, depMs, mine) {
+  if (!P.map) P.map = new LeafletMap($('#pvMap'));
+  if (!origin) {
+    if (/^san diego\b/i.test(from)) origin = { lat: DEMO_ORIGIN.lat, lng: DEMO_ORIGIN.lng };
+    else {
+      pvSetBusy(true, 'Looking up the starting place…');
+      let g = null; try { g = await geocodeDemo(from); } catch (e) { throw new Error('Demo mode needs internet to look up places.'); }
+      if (!g) throw new Error('Couldn’t find the starting place. Try “City, ST”.');
+      origin = { lat: g.lat, lng: g.lng };
+    }
+  }
+  const pts = [];
+  for (const s of stops) {
+    if (s.lat != null) { pts.push({ id: s.id, name: s.name, lat: s.lat, lng: s.lng }); continue; }
+    pvSetBusy(true, 'Looking up “' + s.name.split(',')[0] + '”…');
+    let g = null; try { g = await geocodeDemo(s.query || s.name); } catch (e) { throw new Error('Demo mode needs internet to look up places.'); }
+    if (!g) throw new Error('Couldn’t find “' + s.name + '”. Use ✎ Edit on that stop to fix it.');
+    if (mine !== P.token) return null;
+    pts.push({ id: s.id, name: s.name, lat: g.lat, lng: g.lng });
+  }
+  const built = buildDemoPath(origin, pts), f = state.settings.speedPct / 100;
+  const legMi = built.stopS.map((d, i) => d - (i ? built.stopS[i - 1] : 0));
+  const legT = legMi.map(mi => mi / 62 * 3600 * 1.05 * f), legD = legMi.map(mi => mi * M_PER_MI);
+  return { plan: buildPreviewPlan(depMs, legT, legD, stops, state.settings.dwellMin), path: built.path, pts, startPt: origin, source: 'demo' };
+}
+function pvMapsUrl(from, origin, stops) {
+  const q = s => encodeURIComponent(s.query || s.name);
+  const inner = stops.slice(0, -1).slice(0, MAPS_URL_MAX_WAYPOINTS);
+  let u = 'https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + (origin ? origin.lat + ',' + origin.lng : encodeURIComponent(from)) +
+    '&destination=' + q(stops[stops.length - 1]);
+  if (inner.length) u += '&waypoints=' + inner.map(q).join('%7C');
+  return u;
+}
+function renderPreview(r, stops, from, origin) {
+  const pl = r.plan, dep = pl.depMs;
+  const clock = ts => fmtClock(ts, dep);
+  const hm = sec => fmtDur(sec);
+  $('#pvSummary').innerHTML = `
+    <div class="pvsum"><span>Total miles</span><b>${Math.round(pl.totalMiles).toLocaleString()} mi</b></div>
+    <div class="pvsum"><span>Driving time</span><b>${hm(pl.driveSec)}</b></div>
+    <div class="pvsum"><span>Time at stops</span><b>${hm(pl.stopSec)}</b></div>
+    <div class="pvsum final"><span>Final arrival</span><b>${esc(stops[stops.length - 1].name.split(',')[0])} ${clock(pl.finalArrival)}</b></div>
+    <div class="pvsum wide"><span>Whole trip, start to finish</span><b>${hm(pl.tripSec)}</b>  <small>leaving ${clock(dep)} from ${esc(from)}</small></div>`;
+  $('#pvList').innerHTML = pl.rows.map((w, i) => `
+    <div class="pvstop" data-id="${w.id}">
+      <div class="num">${i + 1}</div>
+      <div class="main">
+        <div class="name">${esc(w.name)}</div>
+        <div class="drive">🚌 Drive: <b>${hm(w.driveSec)}</b> · <b>${fmtMi(w.meters)}</b> ${i === 0 ? 'from the start' : 'from the stop before'}</div>
+        <div class="times">
+          <div><span>Arrive</span><b data-f="arrive">${clock(w.arrive)}</b></div>
+          ${w.last ? '<div><span>Trip ends here</span><b>🏁</b></div>' : `<div><span>Stop time</span><b data-f="dwell">${fmtMin(w.dwellMin)}</b></div><div><span>Leave</span><b data-f="leave">${clock(w.leave)}</b></div>`}
+        </div>
+      </div>
+    </div>`).join('');
+  const shown = r.pts, mapStops = shown.map(p => ({ id: p.id, name: p.name, lat: p.lat, lng: p.lng, dropped: false }));
+  if (P.map) {
+    P.map.setRoute(r.path); P.map.setStops(mapStops, null);
+    P.map.fit([r.startPt, ...mapStops]);
+    setTimeout(() => P.map && P.map.resize(), 100);
+  }
+  const extra = stops.length - 1 > MAPS_URL_MAX_WAYPOINTS;
+  $('#pvMapsNote').textContent = extra ? 'Google Maps links hold the first ' + MAPS_URL_MAX_WAYPOINTS + ' in-between stops; the rest are left off.' : '';
+  $('#pvSource').textContent = r.source === 'demo' ? 'Demo estimate — rough highway times, not Google traffic.' : 'Google Maps times with typical traffic for your start time.';
+}
+function bindPreview() {
+  $('#btnPreview').addEventListener('click', openPreview);
+  $('#btnPvBack').addEventListener('click', closePreview);
+  $('#btnPvStart').addEventListener('click', () => { P.token++; if (P.map) { try { P.map.destroy(); } catch (e) { } P.map = null; } startDrive(); });
+  $('#btnPvUpdate').addEventListener('click', () => runPreview());
+  $('#btnPvLoc').addEventListener('click', () => { $('#pvFrom').value = 'My location'; runPreview(); });
+  $('#pvFrom').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); runPreview(); } });
+  $('#pvWhen').addEventListener('change', () => runPreview());
+  $('#btnPvMaps').addEventListener('click', () => { if (P.mapsUrl) window.open(P.mapsUrl, '_blank', 'noopener'); });
+}
+
 /* ================================================================== BOOT */
 function boot() {
-  bindSetup(); bindDrive(); bindDwell(); bindTrips();
+  bindSetup(); bindDrive(); bindDwell(); bindTrips(); bindPreview();
   renderSetup();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { });
   const q = new URLSearchParams(location.search);
   if (state.trip.started && remainingStops().length && !q.has('setup')) startDrive();
   else show('setup');
-  window.__busEta = { state, D };   // for debugging/tests
+  window.__busEta = { state, D, P };   // for debugging/tests
 }
 boot();

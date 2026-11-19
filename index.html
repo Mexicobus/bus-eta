@@ -69,7 +69,8 @@
     </div>
   </div>
 
-  <footer class="startbar">
+  <footer class="startbar two-btn">
+    <button id="btnPreview" class="btn go preview">🗺 Preview trip</button>
     <button id="btnStart" class="btn go">▶ START DRIVING</button>
   </footer>
 </section>
@@ -108,6 +109,41 @@
       <div id="summary" class="summary"></div>
       <div id="stopList" class="stop-list"></div>
       <div id="doneBox" class="done-box hidden"></div>
+    </div>
+  </main>
+</section>
+
+<!-- ============ PREVIEW (not live) ============ -->
+<section id="preview" class="screen hidden">
+  <header class="bar drive-bar">
+    <span class="chip demo">PREVIEW — NOT LIVE</span>
+    <span class="spacer"></span>
+    <button id="btnPvBack" class="btn small ghost">← Back to setup</button>
+    <button id="btnPvMaps" class="btn small ghost">↗ Open in Google Maps</button>
+    <button id="btnPvStart" class="btn small primary">▶ Start driving</button>
+  </header>
+  <div id="pvErr" class="err-banner hidden"></div>
+  <main class="drive-main">
+    <div class="map-pane"><div id="pvMap"></div></div>
+    <div class="list-pane pv-pane">
+      <div class="pvform">
+        <label class="field">Starting from
+          <input id="pvFrom" type="text" autocomplete="off" autocapitalize="words" enterkeyhint="go" placeholder="City or address">
+        </label>
+        <label class="field">Leaving on
+          <input id="pvWhen" type="datetime-local">
+        </label>
+        <div class="row">
+          <button id="btnPvLoc" class="btn small ghost">📍 Use my location</button>
+          <button id="btnPvUpdate" class="btn small primary">⟳ Update preview</button>
+        </div>
+      </div>
+      <div id="pvBusy" class="pvbusy hidden"></div>
+      <div id="pvSummary" class="pvsummary"></div>
+      <div id="pvList" class="pvlist"></div>
+      <p id="pvSource" class="hint"></p>
+      <p id="pvMapsNote" class="hint"></p>
+      <p class="hint">Preview only — nothing is tracked, the screen is allowed to sleep, and the times don't update on their own.</p>
     </div>
   </main>
 </section>
