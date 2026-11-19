@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bus ETA">
+<meta name="theme-color" content="#0b0f14">
+<title>Bus ETA</title>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🚌%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+
+<!-- ============ SETUP SCREEN ============ -->
+<section id="setup" class="screen">
+  <header class="bar">
+    <h1>🚌 Bus ETA <span class="sub">Trip setup</span></h1>
+    <span id="setupMode" class="chip"></span>
+    <button id="btnSettings" class="btn ghost">⚙ Settings</button>
+  </header>
+
+  <div class="setup-grid">
+    <div class="panel">
+      <h2>Today's trip <span id="tripCount" class="count"></span></h2>
+      <p class="hint">Stops in driving order. Use ▲ ▼ to reorder.</p>
+      <ol id="tripList" class="trip-list"></ol>
+      <div class="row">
+        <button id="btnClearTrip" class="btn ghost">Clear trip</button>
+        <button id="btnDemoTrip" class="btn ghost hidden">Load demo trip</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Regular stops <button id="btnManage" class="btn small ghost">Edit list</button></h2>
+      <p class="hint">Tap a stop to add it to today's trip.</p>
+      <div id="regList" class="reg-list"></div>
+
+      <h2 class="mt">Add a new stop</h2>
+      <form id="addForm" autocomplete="off">
+        <input id="newStop" type="text" placeholder="City or address, e.g. Amarillo, TX" enterkeyhint="done" autocapitalize="words">
+        <label class="check"><input id="saveReg" type="checkbox"> <span>Also save as a regular stop</span></label>
+        <button id="btnAdd" class="btn primary" type="submit">＋ Add to today's trip</button>
+        <div id="addMsg" class="msg" role="status"></div>
+      </form>
+    </div>
+  </div>
+
+  <footer class="startbar">
+    <button id="btnStart" class="btn go">▶ START DRIVING</button>
+  </footer>
+</section>
+
+<!-- ============ DRIVE SCREEN ============ -->
+<section id="drive" class="screen hidden">
+  <header class="bar drive-bar">
+    <div id="clock" class="clock">--:--</div>
+    <span id="modeChip" class="chip"></span>
+    <span id="updChip" class="chip">Waiting…</span>
+    <span id="gpsChip" class="chip hidden"></span>
+    <button id="awakeChip" class="chip chipbtn" title="Tap to retry keeping the screen awake">☀ …</button>
+    <span class="spacer"></span>
+    <button id="btnFit" class="btn small ghost">Map: next stop</button>
+    <button id="btnRefresh" class="btn small ghost">⟳ Refresh</button>
+    <button id="btnEdit" class="btn small ghost">✎ Edit trip</button>
+  </header>
+  <div id="demoStrip" class="demo-strip hidden">
+    <b>DEMO DATA</b><span class="desc"> — simulated bus and sample ETAs. Add a Google key in ⚙ Settings for live data.</span>
+    <span class="spacer"></span>
+    <span class="desc">Sim speed:</span>
+    <button class="btn tiny ghost" data-speed="60">×60</button>
+    <button class="btn tiny ghost" data-speed="300">×300</button>
+    <button class="btn tiny ghost" data-speed="1000">×1000</button>
+    <button id="btnSkip" class="btn tiny ghost">⏭ Next stop</button>
+    <button id="btnDemoReset" class="btn tiny ghost">↺ Restart</button>
+  </div>
+  <div id="errBanner" class="err-banner hidden"></div>
+  <main class="drive-main">
+    <div class="map-pane">
+      <div id="map"></div>
+      <div id="mapMsg" class="map-msg hidden"></div>
+      <div id="demoMark" class="demo-mark hidden">DEMO DATA</div>
+    </div>
+    <div class="list-pane">
+      <div id="summary" class="summary"></div>
+      <div id="stopList" class="stop-list"></div>
+      <div id="doneBox" class="done-box hidden"></div>
+    </div>
+  </main>
+</section>
+
+<!-- ============ SETTINGS ============ -->
+<div id="settings" class="overlay hidden">
+  <div class="modal">
+    <h2>Settings</h2>
+    <label class="field">Google Maps API key
+      <input id="setKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste key once — saved on this device only">
+    </label>
+    <label class="check"><input id="setShowKey" type="checkbox"> <span>Show key</span></label>
+    <p class="hint">Needs “Maps JavaScript API” and “Directions API” enabled on the key. Leave empty to use demo mode.</p>
+    <div class="two">
+      <label class="field">Time at each stop (minutes)
+        <input id="setDwell" type="number" inputmode="numeric" min="0" max="120">
+      </label>
+      <label class="field">Bus time adjustment (%)
+        <input id="setPct" type="number" inputmode="numeric" min="50" max="200">
+      </label>
+    </div>
+    <p class="hint">Time at each stop is added to the ETAs after it. Adjustment 100% = use Google's drive time as is; 110% = 10% longer.</p>
+    <label class="check"><input id="setForceDemo" type="checkbox"> <span>Force demo mode (ignore key)</span></label>
+    <div class="row">
+      <button id="btnSetSave" class="btn primary">Save</button>
+      <button id="btnSetCancel" class="btn ghost">Cancel</button>
+      <button id="btnSetClearKey" class="btn ghost danger">Remove key</button>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
