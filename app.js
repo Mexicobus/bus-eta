@@ -147,7 +147,7 @@ const SAMPLE_STOPS = [
   { name: 'Ephrata, PA', lat: 40.1798, lng: -76.1783 }
 ];
 const state = {
-  settings: Object.assign({ apiKey: '', dwellMin: 10, speedPct: 100, forceDemo: false, demoSpeed: 300, updateMin: 5 }, LS.get('busEta.settings', {})),
+  settings: Object.assign({ apiKey: '', dwellMin: 10, speedPct: 100, forceDemo: false, demoSpeed: 300, updateMin: 5, autoDrop: true, autoDropMin: 3 }, LS.get('busEta.settings', {})),
   trip: LS.get('busEta.trip', { stops: [], started: false, results: null }),
   saved: LS.get('busEta.savedTrips', []),        // named trips on this device
   loadedId: LS.get('busEta.loadedTrip', null),   // which saved trip the current stops came from
@@ -249,6 +249,7 @@ function openSettings() {
   const s = state.settings;
   $('#setKey').value = s.apiKey; $('#setDwell').value = s.dwellMin; $('#setPct').value = s.speedPct;
   $('#setForceDemo').checked = s.forceDemo;
+  $('#setAuto').checked = s.autoDrop !== false; $('#setAutoMin').value = s.autoDropMin || 3;
   $('#setUpd').value = String(UPDATE_CHOICES.includes(+s.updateMin) ? +s.updateMin : 5);
   $('#settings').classList.remove('hidden');
 }
@@ -258,6 +259,7 @@ function saveSettingsForm() {
   s.dwellMin = Math.max(0, Math.min(120, parseInt($('#setDwell').value, 10) || 0));
   s.speedPct = Math.max(50, Math.min(200, parseInt($('#setPct').value, 10) || 100));
   s.forceDemo = $('#setForceDemo').checked;
+  s.autoDrop = $('#setAuto').checked; s.autoDropMin = Math.max(1, Math.min(15, parseInt($('#setAutoMin').value, 10) || 3));
   s.updateMin = UPDATE_CHOICES.includes(+$('#setUpd').value) ? +$('#setUpd').value : 5;
   if (s.apiKey !== oldKey) state.sessionDemo = false;
   saveSettings();
@@ -630,6 +632,7 @@ const D = {
   mode: null, map: null, timers: [], watchId: null, pos: null, posAt: 0,
   svc: null, inflight: false, lastCompute: 0, lastComputePos: null, pending: false, gotFix: false, gmap: null, liveBase: null,
   results: null,      // { updatedAt, source, etas:{id:{eta,dur,dist,arrived}}, path:[[lat,lng]] }
+  nbDone: new Set(), nb: null, auto: null, speed: null, bus: false, autoShown: null,
   err: null, fitMode: 'next', sig: '', wake: null, demo: null, authFailed: false, retryAt: 0, token: 0
 };
 const UPDATE_CHOICES = [5, 10, 15];       // minutes between Google requests while driving
@@ -671,6 +674,7 @@ async function startDrive() {
   uiTick();
 }
 function stopDrive() {
+  hideNextBanner(); hideAutoBanner(); if (D.auto) { D.auto.id = null; D.auto.anchor = null; }
   D.timers.forEach(clearInterval); D.timers = [];
   if (D.watchId != null && navigator.geolocation) navigator.geolocation.clearWatch(D.watchId);
   D.watchId = null; D.inflight = false;
@@ -717,7 +721,7 @@ function startGps() {
   if (!navigator.geolocation) { showErr('This device has no location (GPS) access.'); return; }
   D.watchId = navigator.geolocation.watchPosition(p => {
     D.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
-    D.posAt = Date.now();
+    D.posAt = Date.now(); D.speed = (p.coords.speed != null && isFinite(p.coords.speed)) ? p.coords.speed : null;
     if (D.err && D.err.startsWith('Location')) showErr(null);
     D.map && D.map.setBus(D.pos);
     if (!D.gotFix) { D.gotFix = true; maybeRefresh(true); }   // one request as soon as we know where we are; moving does NOT trigger more
@@ -916,7 +920,7 @@ function demoTick() {
   const simDt = dt * dm.speed;
   dm.simNow += simDt * 1000;
   demoAdvance(simDt);
-  D.pos = posAtMiles(dm, dm.d); D.posAt = real;
+  D.pos = posAtMiles(dm, dm.d); D.posAt = real; D.speed = (dm.dwellLeft > 0 || !dm.stops.some(x => !dm.visited.has(x.id))) ? 0 : 27;
   D.map.setBus(D.pos);
   // ETAs
   const etas = {}, f = state.settings.speedPct / 100;
@@ -986,8 +990,8 @@ function renderList(forceStructure) {
     const here = s.lat != null && D.pos && haversineMi(D.pos, s) < 0.3;
     const passed = !here && e.arrived;
     el.classList.toggle('here', !!here); el.classList.toggle('passed', !!passed);
-    if (here || passed) set('eta', here ? 'HERE' : 'PASSED'); else set('eta', timeHtml(e.eta, stopZone(s), now), true);
-    set('rem', here ? 'At stop' : passed ? 'Tap Dropped Off' : fmtDur((e.eta - now) / 1000) + ' left');
+    if (here || passed) set('eta', (here || D.bus) ? 'HERE' : 'PASSED'); else set('eta', timeHtml(e.eta, stopZone(s), now), true);
+    set('rem', here ? 'At stop' : passed ? (D.bus ? 'At stop' : 'Tap Dropped Off') : fmtDur((e.eta - now) / 1000) + (D.bus ? ' away' : ' left'));
     set('dist', here || passed ? '' : fmtMi(e.dist));
   });
   // summary
@@ -1018,6 +1022,87 @@ function uiTick() {
   else g.classList.add('hidden');
   if (D.mode === 'live' && D.pos && Date.now() - D.posAt > 120000) g.classList.remove('hidden');
   renderList(false);
+  autoDropCheck(now);
+  nextBannerCheck(now);
+  busFooter();
+}
+
+/* ================================================================== BUS SCREEN, NEXT-STOP BANNER, AUTO DROP-OFF */
+function setBusMode(on) {
+  D.bus = !!on;
+  $('#drive').classList.toggle('bus', D.bus);
+  document.documentElement.classList.toggle('busmode', D.bus);
+  setTimeout(() => D.map && D.map.resize(), 60);
+  setTimeout(() => { D.map && D.map.resize(); fitMap(); }, 400);
+  renderList(true); busFooter();
+}
+function busFooter() {   // small "updated X ago" line on the bus screen + banner space
+  const u = $('#busUpd'), r = D.results;
+  const t = D.mode === 'demo' ? 'Demo data' : r ? 'Updated ' + fmtAgo(Date.now() - r.updatedAt) : 'Waiting for first update…';
+  if (u.textContent !== t) u.textContent = t;
+  const more = Math.max(0, remainingStops().length - 4);
+  const m = more ? '+ ' + more + ' more stop' + (more > 1 ? 's' : '') : '';
+  if ($('#busMore').textContent !== m) $('#busMore').textContent = m;
+  $('#drive').classList.toggle('hasbanner', !!(D.nb || D.autoShown));
+}
+/* Next-stop banner: once per stop, when the next stop's ETA is 10 minutes away or less. Uses the ETA that is already
+   counting down on screen (no Google call), no sound. Hidden after 2 minutes or when the stop is dropped off. */
+const NB_MINUTES = 10, NB_SHOW_MS = 120000;
+function hideNextBanner() { D.nb = null; $('#nextBanner').classList.add('hidden'); }
+function nextBannerCheck(now) {
+  const nx = nextStop(), e = nx && D.results && D.results.etas && D.results.etas[nx.id];
+  if (D.nb && (!nx || nx.id !== D.nb.id || Date.now() - D.nb.at > NB_SHOW_MS)) hideNextBanner();
+  if (D.nb || !nx || !e || e.arrived || D.nbDone.has(nx.id)) return;
+  const min = (e.eta - now) / 60000;
+  if (!(min > 0 && min <= NB_MINUTES)) return;
+  if (nx.lat != null && D.pos && haversineMi(D.pos, nx) < 0.3) return;   // already there
+  D.nbDone.add(nx.id);
+  const about = min >= 7 ? 10 : Math.max(1, Math.round(min));
+  D.nb = { id: nx.id, at: Date.now() };
+  const b = $('#nextBanner');
+  b.innerHTML = `Next stop: <b>${esc(nx.name)}</b> in about ${about} minute${about > 1 ? 's' : ''}`;
+  b.classList.remove('hidden');
+}
+/* Auto drop-off: the NEXT stop is marked dropped off after the bus has stayed (about) stopped within ~0.25 mile of it for
+   N minutes (Settings). Bus passing by never counts: it has to stay put. A fix that is >600 m away (or a single noisy fix)
+   is handled with a wider "leave" radius, and a bus that moves >150 m or is going >10 mph restarts the timer. */
+const AUTO_RADIUS_M = 400, AUTO_LEAVE_M = 600, AUTO_MOVED_M = 150, AUTO_FAST_MS = 4.5, AUTO_MAX_ACC_M = 200, AUTO_UNDO_MS = 25000;
+function autoDropMin() { const m = +state.settings.autoDropMin; return isFinite(m) && m >= 1 ? Math.min(15, m) : 3; }
+function autoDropCheck(now) {
+  const A = D.auto || (D.auto = { id: null, since: 0, anchor: null, skip: null });
+  const reset = () => { A.id = null; A.anchor = null; A.since = 0; };
+  if (D.autoShown && Date.now() > D.autoShown.until) hideAutoBanner();
+  const nx = nextStop();
+  if (A.skip) {   // after Undo: don't mark that stop again until the bus has left it
+    const sk = state.trip.stops.find(x => x.id === A.skip);
+    if (!sk || sk.lat == null || !D.pos || haversineMi(D.pos, sk) * M_PER_MI > AUTO_LEAVE_M) A.skip = null;
+  }
+  if (state.settings.autoDrop === false || !D.pos || !nx || nx.lat == null || !D.mode) { reset(); return; }
+  if (D.mode === 'live' && Date.now() - D.posAt > 120000) { reset(); return; }   // GPS gone quiet: don't guess
+  if (D.pos.acc > AUTO_MAX_ACC_M) return;                                            // very fuzzy fix: ignore it
+  if (A.skip === nx.id) { reset(); return; }
+  if (A.id && A.id !== nx.id) reset();
+  const d = haversineMi(D.pos, nx) * M_PER_MI;
+  if (d > (A.id ? AUTO_LEAVE_M : AUTO_RADIUS_M)) { reset(); return; }
+  if (!A.id) { A.id = nx.id; A.anchor = { lat: D.pos.lat, lng: D.pos.lng }; A.since = now; return; }
+  const moved = haversineMi(D.pos, A.anchor) * M_PER_MI;
+  if (moved > AUTO_MOVED_M || (D.speed != null && D.speed > AUTO_FAST_MS)) { A.anchor = { lat: D.pos.lat, lng: D.pos.lng }; A.since = now; return; }
+  if (now - A.since >= autoDropMin() * 60000) autoMarkDropped(nx);
+}
+function autoMarkDropped(stop) {
+  const A = D.auto; A.id = null; A.anchor = null; A.since = 0;
+  D.autoShown = { id: stop.id, until: Date.now() + AUTO_UNDO_MS };
+  const b = $('#autoBanner');
+  $('#autoText').innerHTML = `Marked dropped off at <b>${esc(stop.name.split(',')[0])}</b>`;
+  b.classList.remove('hidden');
+  setDropped(stop.id, true);   // same as tapping Dropped off, including the normal refresh
+}
+function hideAutoBanner() { D.autoShown = null; $('#autoBanner').classList.add('hidden'); }
+function undoAutoDrop() {
+  const sh = D.autoShown; if (!sh) return;
+  hideAutoBanner();
+  D.auto = D.auto || {}; D.auto.skip = sh.id;
+  setDropped(sh.id, false);
 }
 function bindDrive() {
   $('#stopList').addEventListener('click', e => {
@@ -1030,7 +1115,14 @@ function bindDrive() {
     const b = e.target.closest('[data-act="undo"]'); if (!b) return;
     setDropped(b.dataset.id, false);
   });
-  $('#btnEdit').addEventListener('click', () => { stopDrive(); releaseWake(); state.trip.started = false; saveTrip(); show('setup'); renderSetup(); });
+  $('#btnBus').addEventListener('click', () => setBusMode(true));
+  $('#busExit').addEventListener('click', () => setBusMode(false));
+  $('#btnAutoUndo').addEventListener('click', undoAutoDrop);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && D.bus) setBusMode(false); });
+  let lp = null; const lpStop = () => { clearTimeout(lp); lp = null; };   // press and hold ~1 s anywhere on the bus screen = leave it
+  $('#drive').addEventListener('pointerdown', () => { if (D.bus) { lpStop(); lp = setTimeout(() => { lp = null; if (D.bus) setBusMode(false); }, 1000); } });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => $('#drive').addEventListener(ev, lpStop));
+  $('#btnEdit').addEventListener('click', () => { setBusMode(false); stopDrive(); releaseWake(); state.trip.started = false; saveTrip(); show('setup'); renderSetup(); });
   $('#btnRefresh').addEventListener('click', () => { if (D.mode === 'live') { maybeRefresh(true); uiTick(); } else demoTick(); });
   $('#btnFit').addEventListener('click', () => {
     D.fitMode = D.fitMode === 'next' ? 'all' : 'next';
@@ -1049,7 +1141,7 @@ function bindDrive() {
     if (!nxt) return;
     dm.d = Math.max(dm.d, dm.stopSById[nxt.id] - 3); dm.dwellLeft = 0; demoTick();
   });
-  $('#btnDemoReset').addEventListener('click', () => { state.trip.stops.forEach(s => s.dropped = false); saveTrip(); startDrive(); });
+  $('#btnDemoReset').addEventListener('click', () => { D.nbDone = new Set(); hideNextBanner(); hideAutoBanner(); state.trip.stops.forEach(s => s.dropped = false); saveTrip(); startDrive(); });
   window.addEventListener('online', () => { if (D.mode === 'live') { maybeRefresh(true); uiTick(); } });
   window.addEventListener('offline', uiTick);
   window.addEventListener('resize', () => D.map && D.map.resize());

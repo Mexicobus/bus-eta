@@ -85,6 +85,7 @@
     <span class="spacer"></span>
     <button id="btnFit" class="btn small ghost">Map: next stop</button>
     <button id="btnRefresh" class="btn small ghost">⟳ Update now</button>
+    <button id="btnBus" class="btn small ghost">📺 Bus screen</button>
     <button id="btnEdit" class="btn small ghost">✎ Edit trip</button>
   </header>
   <div id="demoStrip" class="demo-strip hidden">
@@ -98,6 +99,8 @@
     <button id="btnDemoReset" class="btn tiny ghost">↺ Restart</button>
   </div>
   <div id="errBanner" class="err-banner hidden"></div>
+  <div id="nextBanner" class="next-banner hidden" role="status"></div>
+  <div id="autoBanner" class="auto-banner hidden" role="status"><span id="autoText"></span><button id="btnAutoUndo" class="btn undo">↶ UNDO</button></div>
   <main class="drive-main">
     <div class="map-pane">
       <div id="map"></div>
@@ -108,8 +111,10 @@
       <div id="summary" class="summary"></div>
       <div id="stopList" class="stop-list"></div>
       <div id="doneBox" class="done-box hidden"></div>
+      <div id="busFoot" class="bus-foot"><span id="busMore"></span><span id="busUpd"></span></div>
     </div>
   </main>
+  <button id="busExit" class="bus-exit" aria-label="Leave bus screen" title="Tap (or press and hold anywhere) to leave the bus screen">✕</button>
 </section>
 
 <!-- ============ PREVIEW (not live) ============ -->
@@ -169,6 +174,11 @@
       <select id="setUpd"><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select>
     </label>
     <p class="hint">While driving, the app asks Google for fresh times this often and counts down on its own in between (less often = lower Google cost). “⟳ Update now” on the driving screen asks right away, at most once a minute.</p>
+    <label class="check"><input id="setAuto" type="checkbox"> <span>Mark a stop “dropped off” automatically</span></label>
+    <label class="field">…after the bus has been stopped at the next stop for (minutes)
+      <input id="setAutoMin" type="number" inputmode="numeric" min="1" max="15">
+    </label>
+    <p class="hint">When the GPS shows the bus within about a quarter mile of the next stop and not moving, it is marked dropped off after this many minutes, with an Undo button. Driving past a stop never marks it. The “Dropped off” button always works too.</p>
     <label class="check"><input id="setForceDemo" type="checkbox"> <span>Force demo mode (ignore key)</span></label>
     <div class="row">
       <button id="btnSetSave" class="btn primary">Save</button>
