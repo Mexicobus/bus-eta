@@ -1,7 +1,7 @@
 'use strict';
 /* Bus ETA — single-page, no build step.
    Screens: setup (pick stops) and drive (map + ETAs).
-   Live mode = Google Maps JS API + Directions service. Demo mode = Leaflet/OSM + simulated bus. */
+   Live mode = Google Maps JS API + Routes library (Route.computeRoutes). Demo mode = Leaflet/OSM + simulated bus. */
 
 /* ------------------------------------------------------------------ helpers */
 const $ = (s, r = document) => r.querySelector(s);
@@ -643,7 +643,7 @@ async function initLive(session) {
   if (session !== D.token || D.mode !== 'live') return;
   showMapMsg(null); showErr(null);
   D.map = new GoogleMap($('#map'));
-  D.svc = new google.maps.DirectionsService();
+  D.svc = true;   // routing goes through googleRoute() (Routes library, loaded on first use)
   if (D.results && D.results.path) D.map.setRoute(D.results.path);
   refreshMap(true);
   startGps();
@@ -676,46 +676,85 @@ function maybeRefresh(force, moved) {
 }
 function dirErrMsg(st, willRetry) {   // plain-words Google route errors (live driving + preview)
   const msgs = {
-    REQUEST_DENIED: 'Google denied the request — enable the Directions API for this key.',
+    REQUEST_DENIED: 'Google denied the request — turn on the Routes API for this key (and allow it in the key’s API restrictions). Changes can take ~5 minutes.',
     OVER_QUERY_LIMIT: 'Google usage limit hit' + (willRetry ? ' — will retry.' : ' — try again in a minute.'),
     ZERO_RESULTS: 'Google found no driving route to one of the stops.',
     NOT_FOUND: 'Google could not find one of the stop addresses.',
+    INVALID_ARGUMENT: 'Google could not understand the start place or one of the stops. Use ✎ Edit to fix the text.',
     MAX_WAYPOINTS_EXCEEDED: 'Too many stops for one route.',
     UNKNOWN_ERROR: 'Google had a temporary error' + (willRetry ? ' — will retry.' : ' — try again.')
   };
   return msgs[st] || 'Route update failed (' + st + ')';
+}
+
+/* ---------------- Google Routes (Maps JavaScript API "routes" library) ---------------- */
+const MAX_INTERMEDIATES = 25;
+function routeStatusOf(e) {   // map a Routes error to one of the plain-words keys above
+  const code = String(e && (e.code || e.status || e.name) || '').toUpperCase(), msg = String(e && e.message || '');
+  if (/PERMISSION_DENIED|UNAUTHENTICATED/.test(code) || /not enabled|has not been used|permission|denied|blocked|forbidden|403|api key|ApiNotActivated|RefererNotAllowed/i.test(msg) && !/NOT_FOUND/.test(code)) return 'REQUEST_DENIED';
+  if (/RESOURCE_EXHAUSTED|OVER_QUERY/.test(code) || /quota|rate limit/i.test(msg)) return 'OVER_QUERY_LIMIT';
+  if (/ZERO_RESULTS/.test(code)) return 'ZERO_RESULTS';
+  if (/NOT_FOUND/.test(code)) return 'NOT_FOUND';
+  if (/MAX_WAYPOINTS/.test(code) || /too many (intermediate|waypoint)/i.test(msg)) return 'MAX_WAYPOINTS_EXCEEDED';
+  if (/INVALID_ARGUMENT|OUT_OF_RANGE|FAILED_PRECONDITION/.test(code)) return 'INVALID_ARGUMENT';
+  return 'UNKNOWN_ERROR';
+}
+const ll = p => ({ lat: typeof p.lat === 'function' ? p.lat() : +p.lat, lng: typeof p.lng === 'function' ? p.lng() : +p.lng });
+let routesLib = null;
+async function getRoutesLib() {
+  if (routesLib) return routesLib;
+  if (!(google.maps && typeof google.maps.importLibrary === 'function')) throw Object.assign(new Error('no routes library'), { routeStatus: 'UNKNOWN_ERROR' });
+  routesLib = google.maps.importLibrary('routes').catch(e => { routesLib = null; throw e; });
+  return routesLib;
+}
+/* where: { origin, destination, intermediates:[...], departureTime? }  — places are text or {lat,lng}.
+   Returns { legs:[{sec, meters, start, end}], path:[[lat,lng]] }. Throws an Error with .routeStatus. */
+async function googleRoute(where) {
+  const fail = (st, e) => Object.assign(new Error((e && e.message) || st), { routeStatus: st });
+  if ((where.intermediates || []).length > MAX_INTERMEDIATES) throw fail('MAX_WAYPOINTS_EXCEEDED');
+  let res;
+  try {
+    const { Route } = await getRoutesLib();
+    const req = {
+      origin: where.origin, destination: where.destination,
+      intermediates: (where.intermediates || []).map(location => ({ location })),
+      travelMode: 'DRIVING', routingPreference: 'TRAFFIC_AWARE', polylineQuality: 'OVERVIEW',
+      fields: ['path', 'legs', 'distanceMeters', 'durationMillis']
+    };
+    if (where.departureTime) req.departureTime = where.departureTime;   // left out = "now"
+    res = await Route.computeRoutes(req);
+  } catch (e) { throw fail(e && e.routeStatus || routeStatusOf(e), e); }
+  const route = res && res.routes && res.routes[0];
+  if (!route || !route.legs || !route.legs.length) throw fail('ZERO_RESULTS');
+  const legs = route.legs.map(l => {
+    const ms = Number.isFinite(l.durationMillis) ? l.durationMillis : l.staticDurationMillis;
+    return { sec: (ms || 0) / 1000, meters: l.distanceMeters || 0, start: l.startLocation ? ll(l.startLocation) : null, end: l.endLocation ? ll(l.endLocation) : null };
+  });
+  const pathPts = (route.path && route.path.length ? route.path : [].concat(...route.legs.map(l => l.path || [])));
+  return { legs, path: pathPts.map(p => { const q = ll(p); return [q.lat, q.lng]; }) };
 }
 function computeLive() {
   const rem = remainingStops();
   if (!rem.length || !D.pos) return;
   if (!navigator.onLine) { return; }
   D.inflight = true; D.lastCompute = Date.now(); D.lastComputePos = { ...D.pos };
-  const loc = s => s.lat != null ? new google.maps.LatLng(s.lat, s.lng) : (s.query || s.name);
-  const req = {
-    origin: new google.maps.LatLng(D.pos.lat, D.pos.lng),
-    destination: loc(rem[rem.length - 1]),
-    waypoints: rem.slice(0, -1).map(s => ({ location: loc(s), stopover: true })),
-    optimizeWaypoints: false,
-    travelMode: google.maps.TravelMode.DRIVING,
-    drivingOptions: { departureTime: new Date(), trafficModel: google.maps.TrafficModel.BEST_GUESS },
-    unitSystem: google.maps.UnitSystem.IMPERIAL
-  };
+  const loc = s => s.lat != null ? { lat: s.lat, lng: s.lng } : (s.query || s.name);
   const session = D.token;
-  new Promise((res, rej) => D.svc.route(req, (r, st) => st === 'OK' ? res(r) : rej(st)))
+  googleRoute({ origin: { lat: D.pos.lat, lng: D.pos.lng }, destination: loc(rem[rem.length - 1]), intermediates: rem.slice(0, -1).map(loc) })
     .then(res => {
       if (session !== D.token) return;
-      const legs = res.routes[0].legs, now = Date.now();
+      const legs = res.legs, now = Date.now();
       const f = state.settings.speedPct / 100;
-      const legT = legs.map(l => ((l.duration_in_traffic || l.duration).value) * f), legD = legs.map(l => l.distance.value);
+      const legT = legs.map(l => l.sec * f), legD = legs.map(l => l.meters);
       D.liveBase = { ids: rem.map(s => s.id), legT, legD, now };
       const etas = buildLiveEtas(rem, legT, legD, now, state.settings.dwellMin);
       legs.forEach((leg, i) => {
         const s = rem[i]; if (!s) return;
-        s.lat = leg.end_location.lat(); s.lng = leg.end_location.lng();
+        if (leg.end) { s.lat = leg.end.lat; s.lng = leg.end.lng; }
         const rg = state.regular.find(r => r.name.toLowerCase() === s.name.toLowerCase());
         if (rg && rg.lat == null) { rg.lat = s.lat; rg.lng = s.lng; }
       });
-      const path = res.routes[0].overview_path.map(p => [p.lat(), p.lng()]);
+      const path = res.path;
       D.results = { updatedAt: now, source: 'live', etas, path };
       state.trip.results = D.results; saveTrip(); saveRegular();
       showErr(null);
@@ -723,9 +762,9 @@ function computeLive() {
       refreshMap(D.fitMode === 'all' || !D.fitted); D.fitted = true;
       renderList(false);
     })
-    .catch(st => {
+    .catch(e => {
       if (session !== D.token) return;
-      showErr(dirErrMsg(st, true) + ' Showing last ETAs.');
+      showErr(dirErrMsg(e.routeStatus || routeStatusOf(e), true) + ' Showing last ETAs.');
     })
     .finally(() => { D.inflight = false; });
 }
@@ -1025,7 +1064,7 @@ async function runPreview(notice) {
   if (!from) { pvSetError('Type where the trip starts, or tap “Use my location”.'); return; }
   const depPicked = $('#pvWhen').value ? new Date($('#pvWhen').value) : new Date();
   if (isNaN(depPicked)) { pvSetError('Pick a start date and time.'); return; }
-  const dep = new Date(Math.max(depPicked.getTime(), Date.now()));   // Google can't plan a start in the past
+  const dep = new Date(Math.max(depPicked.getTime(), Date.now() + 60000));   // Google rejects a start time in the past, so never earlier than 1 minute from now
   LS.set('busEta.preview', { from });
   if (P.map && (P.map instanceof LeafletMap) !== !!(isDemo() || notice)) { try { P.map.destroy(); } catch (e) { } P.map = null; }
   pvSetError(notice || null); pvSetBusy(true, 'Planning the route…');
@@ -1042,7 +1081,7 @@ async function runPreview(notice) {
     renderPreview(r, stops, from, origin);
   } catch (e) {
     if (mine !== P.token) return;
-    pvSetError(typeof e === 'string' ? dirErrMsg(e, false) : (e && e.message) || 'Something went wrong. Try again.');
+    pvSetError(e && e.routeStatus ? dirErrMsg(e.routeStatus, false) : (e && e.message) || 'Something went wrong. Try again.');
   } finally { if (mine === P.token) pvSetBusy(false); }
 }
 async function pvLive(stops, from, origin, dep, mine) {
@@ -1050,23 +1089,17 @@ async function pvLive(stops, from, origin, dep, mine) {
   catch (e) { if (D.authFailed) return null; throw new Error('Can’t reach Google Maps (no signal?). Check your connection and tap Update preview.'); }
   if (mine !== P.token) return null;
   if (!P.map) P.map = new GoogleMap($('#pvMap'));
-  const svc = new google.maps.DirectionsService();
-  const loc = s => s.lat != null ? new google.maps.LatLng(s.lat, s.lng) : (s.query || s.name);
-  const req = {
-    origin: origin ? new google.maps.LatLng(origin.lat, origin.lng) : from,
-    destination: loc(stops[stops.length - 1]),
-    waypoints: stops.slice(0, -1).map(s => ({ location: loc(s), stopover: true })),
-    optimizeWaypoints: false, travelMode: google.maps.TravelMode.DRIVING,
-    drivingOptions: { departureTime: dep, trafficModel: google.maps.TrafficModel.BEST_GUESS },
-    unitSystem: google.maps.UnitSystem.IMPERIAL
-  };
-  const res = await new Promise((ok, bad) => svc.route(req, (r, st) => st === 'OK' ? ok(r) : bad(st)));
+  const loc = s => s.lat != null ? { lat: s.lat, lng: s.lng } : (s.query || s.name);
+  const res = await googleRoute({
+    origin: origin ? { lat: origin.lat, lng: origin.lng } : from,
+    destination: loc(stops[stops.length - 1]), intermediates: stops.slice(0, -1).map(loc), departureTime: dep
+  });
   if (mine !== P.token) return null;
-  const f = state.settings.speedPct / 100, legs = res.routes[0].legs;
-  const legT = legs.map(l => ((l.duration_in_traffic || l.duration).value) * f), legD = legs.map(l => l.distance.value);
-  const pts = stops.map((s, i) => legs[i] ? { id: s.id, name: s.name, lat: legs[i].end_location.lat(), lng: legs[i].end_location.lng() } : null).filter(Boolean);
-  const startPt = legs[0] && legs[0].start_location ? { lat: legs[0].start_location.lat(), lng: legs[0].start_location.lng() } : (origin || null);
-  return { plan: buildPreviewPlan(dep.getTime(), legT, legD, stops.slice(0, legs.length), state.settings.dwellMin), path: res.routes[0].overview_path.map(p => [p.lat(), p.lng()]), pts, startPt, source: 'google' };
+  const f = state.settings.speedPct / 100, legs = res.legs;
+  const legT = legs.map(l => l.sec * f), legD = legs.map(l => l.meters);
+  const pts = stops.map((s, i) => legs[i] && legs[i].end ? { id: s.id, name: s.name, lat: legs[i].end.lat, lng: legs[i].end.lng } : null).filter(Boolean);
+  const startPt = legs[0] && legs[0].start ? legs[0].start : (origin || null);
+  return { plan: buildPreviewPlan(dep.getTime(), legT, legD, stops.slice(0, legs.length), state.settings.dwellMin), path: res.path, pts, startPt, source: 'google' };
 }
 async function pvDemo(stops, from, origin, depMs, mine) {
   if (!P.map) P.map = new LeafletMap($('#pvMap'));

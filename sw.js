@@ -1,5 +1,5 @@
 // Tiny offline cache for the app shell (stale-while-revalidate). Google/OSM requests are not cached.
-const CACHE = 'bus-eta-v5';
+const CACHE = 'bus-eta-v6';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/leaflet.js', 'vendor/leaflet.css'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
