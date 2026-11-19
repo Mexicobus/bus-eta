@@ -115,6 +115,17 @@ input:focus{outline:3px solid var(--blue);border-color:var(--blue)}
 .done-box button{min-height:42px;font-size:16px;padding:0 12px;border-radius:21px;color:var(--text)}
 .alldone{font-size:34px;text-align:center;padding:30px;color:var(--green);font-weight:800}
 
+/* ---- per-stop time chip ---- */
+.dwellchip{font:inherit;font-weight:700;font-size:17px;min-height:44px;padding:0 14px;border-radius:22px;border:2px solid var(--line);background:#0b1118;color:var(--dim);cursor:pointer;touch-action:manipulation;white-space:nowrap;flex:none}
+.trip-list .nm .dwellchip small,.dwellchip small{display:inline;color:inherit;opacity:.8;font-size:14px;font-weight:500}
+.dwellchip.custom{color:#1a1200;background:var(--accent);border-color:var(--accent)}
+.dwellchip:active{transform:scale(.97)}
+.trip-list .nm .dwellchip{display:block;margin-top:4px}
+.stop .top .dwellchip{margin-left:auto}
+.stop .top .name{flex:0 1 auto;min-width:0}
+.quick .btn{flex:1;min-width:70px}
+#dwellEdit .row{margin-top:14px}
+
 /* ---- settings ---- */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:grid;place-items:center;z-index:5000;padding:16px;overflow:auto}
 .modal{background:var(--panel);border:2px solid var(--line);border-radius:20px;padding:20px 24px;width:min(640px,100%);max-height:100%;overflow:auto}

@@ -13,6 +13,24 @@ const LS = {
 const uid = () => Math.random().toString(36).slice(2, 9);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const M_PER_MI = 1609.344;
+const MAX_STOP_MIN = 480;
+
+/* Per-stop time: a stop may carry its own `dwellMin`; without one it follows the Settings standard. */
+function hasOwnDwell(s) { return s && s.dwellMin != null && s.dwellMin !== '' && isFinite(+s.dwellMin); }
+function stopDwellMin(s, standard) { return hasOwnDwell(s) ? Math.max(0, +s.dwellMin) : Math.max(0, +standard || 0); }
+function fmtMin(m) { return Math.round(m) + ' min'; }
+/* ETAs for the remaining stops from Google leg data: each stop's own dwell is added to every stop AFTER it.
+   legT = driving seconds per leg (already scaled), legD = meters per leg. */
+function buildLiveEtas(rem, legT, legD, now, standard) {
+  const etas = {}; let cumT = 0, cumD = 0, waited = 0;
+  rem.forEach((s, i) => {
+    if (legT[i] == null) return;
+    cumT += legT[i]; cumD += legD[i];
+    etas[s.id] = { eta: now + (cumT + waited) * 1000, dur: cumT + waited, dist: cumD };
+    waited += stopDwellMin(s, standard) * 60;   // this stop's wait delays the NEXT stops only
+  });
+  return etas;
+}
 
 function haversineMi(a, b) {
   const R = 3958.8, r = Math.PI / 180;
@@ -93,7 +111,7 @@ function renderSetup() {
   $('#tripList').innerHTML = stops.length ? stops.map((s, i) => `
     <li data-id="${s.id}" class="${s.dropped ? 'dropped' : ''}">
       <span class="num">${i + 1}</span>
-      <span class="nm">${esc(s.name)}${s.dropped ? '<small>already dropped off</small>' : ''}</span>
+      <span class="nm">${esc(s.name)}${s.dropped ? '<small>already dropped off</small>' : `<button class="dwellchip ${hasOwnDwell(s) ? 'custom' : ''}" data-act="dwell" aria-label="Change stop time for ${esc(s.name)}">⏱ Stop time: ${fmtMin(stopDwellMin(s, state.settings.dwellMin))}${hasOwnDwell(s) ? '' : ' <small>(standard)</small>'}</button>`}</span>
       <button class="btn" data-act="up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
       <button class="btn" data-act="down" aria-label="Move down" ${i === stops.length - 1 ? 'disabled' : ''}>▼</button>
       <button class="btn danger" data-act="rm" aria-label="Remove">✕</button>
@@ -153,6 +171,7 @@ function bindSetup() {
   $('#tripList').addEventListener('click', e => {
     const b = e.target.closest('button[data-act]'); if (!b) return;
     const id = b.closest('li').dataset.id, st = state.trip.stops, i = st.findIndex(s => s.id === id);
+    if (b.dataset.act === 'dwell') { openDwell(id); return; }
     if (b.dataset.act === 'rm') st.splice(i, 1);
     if (b.dataset.act === 'up' && i > 0) [st[i - 1], st[i]] = [st[i], st[i - 1]];
     if (b.dataset.act === 'down' && i < st.length - 1) [st[i + 1], st[i]] = [st[i], st[i + 1]];
@@ -194,6 +213,56 @@ function saveSettingsForm() {
   $('#settings').classList.add('hidden');
   renderSetup();
   if (!$('#drive').classList.contains('hidden')) startDrive();   // re-init drive with the new mode
+}
+
+/* ---------------- per-stop time editor (used on both screens) ---------------- */
+let dwellEditId = null;
+function openDwell(id) {
+  const s = state.trip.stops.find(x => x.id === id); if (!s) return;
+  dwellEditId = id;
+  $('#dwellTitle').textContent = 'Stop time at ' + s.name.split(',')[0];
+  $('#dwellInput').value = stopDwellMin(s, state.settings.dwellMin);
+  $('#dwellStd').textContent = 'Use standard (' + fmtMin(state.settings.dwellMin) + ')';
+  $('#dwellStd').disabled = !hasOwnDwell(s);
+  $('#dwellEdit').classList.remove('hidden');
+}
+function closeDwell() { dwellEditId = null; $('#dwellEdit').classList.add('hidden'); }
+function applyDwellChange() {
+  state.trip.results = D.mode === 'live' ? D.results : null;
+  saveTrip();
+  renderSetup();
+  if (!$('#drive').classList.contains('hidden')) {
+    D.sig = null;
+    if (D.demo) demoTick();
+    else {
+      const b = D.liveBase, rem = remainingStops();
+      if (b && b.ids.join() === rem.map(s => s.id).join() && D.results) {   // re-add waits to the last Google answer right away
+        D.results.etas = buildLiveEtas(rem, b.legT, b.legD, b.now, state.settings.dwellMin);
+        state.trip.results = D.results; saveTrip();
+      }
+      renderList(true);
+    }
+  }
+}
+function setStopDwell(id, minutes) {   // minutes = null -> back to standard
+  const s = state.trip.stops.find(x => x.id === id); if (!s) return;
+  if (minutes == null) delete s.dwellMin;
+  else s.dwellMin = Math.max(0, Math.min(MAX_STOP_MIN, Math.round(minutes)));
+  applyDwellChange();
+}
+function bindDwell() {
+  $('#dwellEdit').addEventListener('click', e => {
+    if (e.target === $('#dwellEdit')) { closeDwell(); return; }
+    const q = e.target.closest('[data-min]');
+    if (q) $('#dwellInput').value = q.dataset.min;
+  });
+  $('#dwellSave').addEventListener('click', () => {
+    const v = parseInt($('#dwellInput').value, 10);
+    if (isNaN(v)) { $('#dwellInput').focus(); return; }
+    const id = dwellEditId; closeDwell(); setStopDwell(id, v);
+  });
+  $('#dwellStd').addEventListener('click', () => { const id = dwellEditId; closeDwell(); setStopDwell(id, null); });
+  $('#dwellCancel').addEventListener('click', closeDwell);
 }
 
 /* ================================================================== MAP ADAPTERS */
@@ -421,13 +490,12 @@ function computeLive() {
     .then(res => {
       if (session !== D.token) return;
       const legs = res.routes[0].legs, now = Date.now();
-      const dwell = state.settings.dwellMin * 60, f = state.settings.speedPct / 100;
-      const etas = {}; let cumT = 0, cumD = 0;
+      const f = state.settings.speedPct / 100;
+      const legT = legs.map(l => ((l.duration_in_traffic || l.duration).value) * f), legD = legs.map(l => l.distance.value);
+      D.liveBase = { ids: rem.map(s => s.id), legT, legD, now };
+      const etas = buildLiveEtas(rem, legT, legD, now, state.settings.dwellMin);
       legs.forEach((leg, i) => {
         const s = rem[i]; if (!s) return;
-        cumT += ((leg.duration_in_traffic || leg.duration).value) * f;
-        cumD += leg.distance.value;
-        etas[s.id] = { eta: now + (cumT + dwell * i) * 1000, dur: cumT + dwell * i, dist: cumD };
         s.lat = leg.end_location.lat(); s.lng = leg.end_location.lng();
         const rg = state.regular.find(r => r.name.toLowerCase() === s.name.toLowerCase());
         if (rg && rg.lat == null) { rg.lat = s.lat; rg.lng = s.lng; }
@@ -524,8 +592,8 @@ function demoAdvance(simDt) {
       dm.d = target; simDt -= Math.max(need, 0);
       if (!nextStop) break;
       dm.visited.add(nextStop.id);
-      const dw = state.settings.dwellMin * 60;
       const live = state.trip.stops.find(s => s.id === nextStop.id);
+      const dw = live ? stopDwellMin(live, state.settings.dwellMin) * 60 : 0;
       if (live && !live.dropped && dw > 0) { dm.dwellLeft = dw; dm.dwellId = nextStop.id; }
     }
   }
@@ -539,15 +607,16 @@ function demoTick() {
   D.pos = posAtMiles(dm, dm.d); D.posAt = real;
   D.map.setBus(D.pos);
   // ETAs
-  const etas = {}, dwell = state.settings.dwellMin * 60, f = state.settings.speedPct / 100;
-  let j = 0;
+  const etas = {}, f = state.settings.speedPct / 100;
+  let j = 0, waited = 0;   // waited = own dwell of earlier stops still ahead of the bus
   state.trip.stops.forEach(s => {
     if (s.dropped || s.lat == null) return;
     if (dm.visited.has(s.id)) { etas[s.id] = { eta: dm.simNow, dur: 0, dist: 0, arrived: true }; return; }
     const miles = Math.max(0, dm.stopSById[s.id] - dm.d);
     const tf = 1.03 + 0.07 * Math.sin(dm.simNow / 3.6e6 / 2.3 + j);
-    const dur = (miles / 62 * 3600 * tf + dm.dwellLeft + j * dwell) * f;
+    const dur = (miles / 62 * 3600 * tf + dm.dwellLeft + waited) * f;
     etas[s.id] = { eta: dm.simNow + dur * 1000, dur, dist: miles * M_PER_MI };
+    waited += stopDwellMin(s, state.settings.dwellMin) * 60;
     j++;
   });
   D.results = { updatedAt: real, source: 'demo', etas, path: dm.path };
@@ -573,14 +642,14 @@ function fitMap() {
 }
 function renderList(forceStructure) {
   const list = $('#stopList'), stops = state.trip.stops, nx = nextStop();
-  const sig = stops.map(s => s.id + (s.dropped ? 'd' : '')).join(',') + '|' + (nx ? nx.id : '');
+  const sig = stops.map(s => s.id + (s.dropped ? 'd' : '') + (hasOwnDwell(s) ? '=' + s.dwellMin : '')).join(',') + '#' + state.settings.dwellMin + '|' + (nx ? nx.id : '');
   if (forceStructure || sig !== D.sig) {
     D.sig = sig;
     list.innerHTML = stops.map((s, i) => s.dropped ? '' : `
       <div class="stop ${nx && nx.id === s.id ? 'next' : ''}" data-id="${s.id}">
         <div class="num">${i + 1}</div>
         <div class="main">
-          <div class="top"><div class="name">${esc(s.name)}</div><span class="tag">NEXT</span></div>
+          <div class="top"><div class="name">${esc(s.name)}</div><button class="dwellchip ${hasOwnDwell(s) ? 'custom' : ''}" data-act="dwell" aria-label="Change stop time for ${esc(s.name)}">⏱ Stop time: ${fmtMin(stopDwellMin(s, state.settings.dwellMin))}</button><span class="tag">NEXT</span></div>
           <div class="row2">
             <div class="eta" data-f="eta">--</div>
             <div class="side"><span data-f="rem">—</span><span data-f="dist"></span></div>
@@ -635,6 +704,8 @@ function uiTick() {
 }
 function bindDrive() {
   $('#stopList').addEventListener('click', e => {
+    const dw = e.target.closest('[data-act="dwell"]');
+    if (dw) { openDwell(dw.closest('.stop').dataset.id); return; }
     const b = e.target.closest('[data-act="drop"]'); if (!b) return;
     setDropped(b.closest('.stop').dataset.id, true);
   });
@@ -699,7 +770,7 @@ function releaseWake() { try { D.wake && D.wake.release(); } catch (e) { } D.wak
 
 /* ================================================================== BOOT */
 function boot() {
-  bindSetup(); bindDrive();
+  bindSetup(); bindDrive(); bindDwell();
   renderSetup();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { });
   const q = new URLSearchParams(location.search);

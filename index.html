@@ -26,7 +26,7 @@
   <div class="setup-grid">
     <div class="panel">
       <h2>Today's trip <span id="tripCount" class="count"></span></h2>
-      <p class="hint">Stops in driving order. Use ▲ ▼ to reorder.</p>
+      <p class="hint">Stops in driving order. Use ▲ ▼ to reorder. Tap “Stop time” to change how long you stay at one stop.</p>
       <ol id="tripList" class="trip-list"></ol>
       <div class="row">
         <button id="btnClearTrip" class="btn ghost">Clear trip</button>
@@ -102,19 +102,42 @@
     <label class="check"><input id="setShowKey" type="checkbox"> <span>Show key</span></label>
     <p class="hint">Needs “Maps JavaScript API” and “Directions API” enabled on the key. Leave empty to use demo mode.</p>
     <div class="two">
-      <label class="field">Time at each stop (minutes)
+      <label class="field">Standard time at each stop (minutes)
         <input id="setDwell" type="number" inputmode="numeric" min="0" max="120">
       </label>
       <label class="field">Bus time adjustment (%)
         <input id="setPct" type="number" inputmode="numeric" min="50" max="200">
       </label>
     </div>
-    <p class="hint">Time at each stop is added to the ETAs after it. Adjustment 100% = use Google's drive time as is; 110% = 10% longer.</p>
+    <p class="hint">This is the standard time at a stop (new stops use it). You can change any one stop's time in the stop list by tapping its “Stop time” button. A stop's time is added to the ETAs after it. Adjustment 100% = use Google's drive time as is; 110% = 10% longer.</p>
     <label class="check"><input id="setForceDemo" type="checkbox"> <span>Force demo mode (ignore key)</span></label>
     <div class="row">
       <button id="btnSetSave" class="btn primary">Save</button>
       <button id="btnSetCancel" class="btn ghost">Cancel</button>
       <button id="btnSetClearKey" class="btn ghost danger">Remove key</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PER-STOP TIME ============ -->
+<div id="dwellEdit" class="overlay hidden">
+  <div class="modal">
+    <h2 id="dwellTitle">Stop time</h2>
+    <label class="field">Minutes at this stop
+      <input id="dwellInput" type="number" inputmode="numeric" min="0" max="480">
+    </label>
+    <div class="row quick">
+      <button class="btn" data-min="10">10</button>
+      <button class="btn" data-min="20">20</button>
+      <button class="btn" data-min="30">30</button>
+      <button class="btn" data-min="45">45</button>
+      <button class="btn" data-min="60">60</button>
+      <button class="btn" data-min="90">90</button>
+    </div>
+    <div class="row">
+      <button id="dwellSave" class="btn primary">Save</button>
+      <button id="dwellStd" class="btn ghost">Use standard</button>
+      <button id="dwellCancel" class="btn ghost">Cancel</button>
     </div>
   </div>
 </div>
