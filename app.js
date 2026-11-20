@@ -772,7 +772,9 @@ async function startDrive() {
   state.trip.started = true; saveTrip();
   show('drive');
   D.mode = isDemo() ? 'demo' : 'live';
-  D.err = null; D.authFailed = false; D.sig = ''; D.pos = null; D.results = null; D.gotFix = false; D.liveBase = null; D.pending = false;
+  D.err = null; D.authFailed = false; D.sig = ''; D.pos = null; D.posApprox = false; D.results = null; D.gotFix = false; D.liveBase = null; D.pending = false;
+  D.gps = null; D.flash = null; D.wantDone = false; D.noGpsCenter = null;
+  hideGpsBanner();
   $('#demoStrip').classList.toggle('hidden', D.mode !== 'demo');
   $('#demoMark').classList.toggle('hidden', D.mode !== 'demo');
   $('#errBanner').classList.add('hidden');
@@ -802,8 +804,8 @@ async function startDrive() {
 function stopDrive() {
   hideNextBanner(); hideAutoBanner(); if (D.auto) { D.auto.id = null; D.auto.anchor = null; }
   D.timers.forEach(clearInterval); D.timers = [];
-  if (D.watchId != null && navigator.geolocation) navigator.geolocation.clearWatch(D.watchId);
-  D.watchId = null; D.inflight = false;
+  stopGps();
+  D.inflight = false;
   if (D.map) {
     if (D.map instanceof GoogleMap) { D.map.reset(); D.gmap = D.map; }   // reuse it next time: every new Google map is a billable "map load"
     else { try { D.map.destroy(); } catch (e) { } }
@@ -813,6 +815,28 @@ function stopDrive() {
 }
 function dropGmap() { if (D.gmap) { try { D.gmap.destroy(); } catch (e) { } D.gmap = null; } }
 function showMapMsg(t) { const m = $('#mapMsg'); if (!t) { m.classList.add('hidden'); return; } m.textContent = t; m.classList.remove('hidden'); }
+function flash(text, kind) { D.flash = { text, kind: kind || '', until: Date.now() + 5000 }; D.btnFlashUntil = kind === 'ok' ? Date.now() + 3000 : 0; uiTick(); }
+function statusInfo() {   // one plain line saying what the app is doing / waiting for
+  if (D.flash && Date.now() < D.flash.until) return { text: D.flash.text, kind: D.flash.kind };
+  if (D.mode === 'demo') return { text: 'Demo data — simulated bus', kind: '' };
+  const r = D.results, g = D.gps || {};
+  if (!D.map && !D.authFailed) return { text: 'Loading Google Maps…', kind: 'warn' };
+  if (!D.pos) {
+    if (g.unsupported) return { text: 'Waiting for location — this browser can’t share it', kind: 'bad' };
+    if (g.denied) return { text: 'Waiting for location — it is blocked (see the message above)', kind: 'bad' };
+    const sec = g.started ? Math.round((Date.now() - g.started) / 1000) : 0;
+    return { text: 'Waiting for your location (GPS)… ' + sec + 's' + (sec >= 15 ? ' — see the message above' : ''), kind: sec >= 15 ? 'bad' : 'warn' };
+  }
+  const pre = D.posApprox ? 'Using your last known location · ' : '';
+  if (!r) {
+    if (D.inflight) return { text: pre + 'Asking Google for times…', kind: 'warn' };
+    if (D.err) return { text: pre + 'No times yet — Google gave an error (red message above)', kind: 'bad' };
+    if (!navigator.onLine) return { text: pre + 'No internet — waiting for signal', kind: 'bad' };
+    return { text: pre + 'Got your location — about to ask Google for times…', kind: 'warn' };
+  }
+  const age = Date.now() - r.updatedAt, next = Math.max(0, D.lastCompute + updateMs() - Date.now());
+  return { text: pre + 'Times updated ' + fmtAgo(age) + (D.inflight ? ' · updating now…' : ' · next update in ' + Math.max(1, Math.ceil(next / 60000)) + ' min'), kind: D.err ? 'warn' : 'ok' };
+}
 function showErr(t) { D.err = t; const b = $('#errBanner'); b.textContent = t || ''; b.classList.toggle('hidden', !t); }
 
 /* ---------------- live mode ---------------- */
@@ -843,18 +867,83 @@ function onGoogleAuthFailure() {
   if (state.trip.started && !$('#drive').classList.contains('hidden')) startDrive();
   setTimeout(() => showErr('Google rejected the API key — showing DEMO data. Check the key in Settings.'), 300);
 }
+/* ---------------- GPS: quick inexact/cached fix + live watch, with a clear message when it doesn't work ---------------- */
+const GPS_WAIT_MS = 15000, LASTPOS_MAX_MS = 30 * 60000;
+function stopGps() {
+  if (D.watchId != null && navigator.geolocation) { try { navigator.geolocation.clearWatch(D.watchId); } catch (e) { } }
+  D.watchId = null; if (D.gps && D.gps.timer) clearTimeout(D.gps.timer); D.gps = null;
+}
+function gotPosition(p, how) {
+  const first = !D.pos || D.posApprox;
+  const prev = D.pos, wasApprox = D.posApprox;
+  D.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
+  D.posAt = Date.now(); D.posApprox = how === 'cache';
+  D.speed = (p.coords.speed != null && isFinite(p.coords.speed)) ? p.coords.speed : null;
+  if (how !== 'cache' && (!D.lastSaved || Date.now() - D.lastSaved > 15000)) { D.lastSaved = Date.now(); LS.set('busEta.lastPos', { lat: D.pos.lat, lng: D.pos.lng, acc: D.pos.acc, at: Date.now() }); }
+  if (D.gps) { D.gps.denied = false; D.gps.lastErr = null; }
+  hideGpsBanner();
+  D.map && D.map.setBus(D.pos);
+  if (!D.gotFix) { D.gotFix = true; maybeRefresh(true); }   // one request as soon as we know where we are; moving does NOT trigger more
+  else if (wasApprox && !D.posApprox && prev && haversineMi(prev, D.pos) > 1.5) maybeRefresh(true);   // the remembered spot was off: ask again
+  if (first && !D.posApprox) { fitMap(); }
+  refreshMap(false); uiTick();
+}
+function gpsError(err, how) {
+  const g = D.gps; if (!g) return;
+  const code = err && err.code;
+  if (code === 1) g.denied = true; else g.lastErr = err && err.message || 'no answer';
+  if (how === 'quick' && code !== 1 && !D.pos) {   // quick inexact try failed: one more try with the GPS chip
+    navigator.geolocation.getCurrentPosition(p => gotPosition(p, 'precise'), e => gpsError(e, 'precise'), { enableHighAccuracy: true, maximumAge: 60000, timeout: 20000 });
+  }
+  if (g.denied && !D.pos) showGpsBanner();   // blocked: no need to wait
+  uiTick();
+}
 function startGps() {
-  if (!navigator.geolocation) { showErr('This device has no location (GPS) access.'); return; }
-  D.watchId = navigator.geolocation.watchPosition(p => {
-    D.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
-    D.posAt = Date.now(); D.speed = (p.coords.speed != null && isFinite(p.coords.speed)) ? p.coords.speed : null;
-    if (D.err && D.err.startsWith('Location')) showErr(null);
-    D.map && D.map.setBus(D.pos);
-    if (!D.gotFix) { D.gotFix = true; maybeRefresh(true); }   // one request as soon as we know where we are; moving does NOT trigger more
-    refreshMap(false);
-  }, err => {
-    showErr('Location problem: ' + (err.code === 1 ? 'permission denied — allow Location for this site in Safari settings.' : err.message));
-  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+  stopGps();
+  const g = D.gps = { started: Date.now(), denied: false, lastErr: null, timer: null };
+  if (!navigator.geolocation) { g.unsupported = true; showGpsBanner(); return; }
+  // use a recent remembered spot straight away (marked approximate) so times can start while the real fix comes in
+  const c = LS.get('busEta.lastPos', null);
+  if (c && isFinite(c.lat) && isFinite(c.lng) && Date.now() - c.at < LASTPOS_MAX_MS) gotPosition({ coords: { latitude: c.lat, longitude: c.lng, accuracy: Math.max(c.acc || 0, 1000), speed: null } }, 'cache');
+  try {
+    navigator.geolocation.getCurrentPosition(p => gotPosition(p, 'quick'), e => gpsError(e, 'quick'), { enableHighAccuracy: false, maximumAge: 600000, timeout: 10000 });
+    D.watchId = navigator.geolocation.watchPosition(p => gotPosition(p, 'watch'), e => gpsError(e, 'watch'), { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+  } catch (e) { g.lastErr = String(e && e.message || e); showGpsBanner(); }
+  g.timer = setTimeout(() => {   // nothing after ~15 s: say so, plainly
+    g.timer = null;
+    if (!D.pos || D.posApprox) { showGpsBanner(); centerOnFirstStop(); }
+  }, GPS_WAIT_MS);
+}
+function gpsBannerText() {
+  const g = D.gps || {};
+  const why = g.unsupported ? 'This browser can’t share your location.'
+    : g.denied ? 'Location is blocked for this browser, so Bus ETA can’t tell where the bus is.'
+    : 'Your location isn’t available right now (no answer from the phone’s GPS, or the browser isn’t sharing it).';
+  return why;
+}
+function showGpsBanner() {
+  const b = $('#gpsBanner'); if (!b) return;
+  $('#gpsWhy').textContent = gpsBannerText();
+  b.classList.remove('hidden');
+}
+function hideGpsBanner() { const b = $('#gpsBanner'); if (b) b.classList.add('hidden'); }
+function gpsRetry() {
+  $('#gpsWhy').textContent = 'Trying again…';
+  const was = D.mode === 'live';
+  if (!was) return;
+  startGps(); uiTick();
+  setTimeout(() => { if ((!D.pos || D.posApprox) && D.gps) showGpsBanner(); }, 4000);
+}
+/* no GPS: at least show the first stop on the map (looked up with free OpenStreetMap, no Google cost) */
+async function centerOnFirstStop() {
+  const st = remainingStops()[0]; if (!st || !D.map || (D.pos && !D.posApprox)) return;
+  let pt = st.lat != null ? { lat: st.lat, lng: st.lng } : null;
+  if (!pt && D.noGpsCenterFor !== st.id) {
+    D.noGpsCenterFor = st.id;
+    try { const g = await geocodeDemo(st.query || st.name); if (g) pt = { lat: g.lat, lng: g.lng }; } catch (e) { }
+  }
+  if (!pt || !D.map || (D.pos && !D.posApprox)) return;
+  D.noGpsCenter = pt; D.map.fit([pt]);
 }
 /* When Google is asked (live driving):
    - on start, on Dropped off / Undo, after the trip is edited, and when ⟳ Update now is tapped ("force")
@@ -871,7 +960,8 @@ function maybeRefresh(force) {
 }
 function dirErrMsg(st, willRetry) {   // plain-words Google route errors (live driving + preview)
   const msgs = {
-    REQUEST_DENIED: 'Google denied the request — turn on the Routes API for this key (and allow it in the key’s API restrictions). Changes can take ~5 minutes.',
+    REQUEST_DENIED: 'Google denied the request — turn on the Routes API for this key (and allow it in the key’s API restrictions). Also check that billing is on and that the key allows this website (mexicobus.github.io). Changes can take ~5 minutes.',
+    NETWORK_ERROR: 'Couldn’t reach Google — check the phone’s signal' + (willRetry ? '; will retry.' : '.'),
     OVER_QUERY_LIMIT: 'Google usage limit hit' + (willRetry ? ' — will retry.' : ' — try again in a minute.'),
     ZERO_RESULTS: 'Google found no driving route to one of the stops.',
     NOT_FOUND: 'Google could not find one of the stop addresses.',
@@ -887,6 +977,7 @@ const MAX_INTERMEDIATES = 25;
 function routeStatusOf(e) {   // map a Routes error to one of the plain-words keys above
   const code = String(e && (e.code || e.status || e.name) || '').toUpperCase(), msg = String(e && e.message || '');
   if (/PERMISSION_DENIED|UNAUTHENTICATED/.test(code) || /not enabled|has not been used|permission|denied|blocked|forbidden|403|api key|ApiNotActivated|RefererNotAllowed/i.test(msg) && !/NOT_FOUND/.test(code)) return 'REQUEST_DENIED';
+  if (e && (e.name === 'TypeError' || e.routeTimeout) || /failed to fetch|network|load failed|timed? ?out|offline|did not answer/i.test(msg)) return 'NETWORK_ERROR';
   if (/RESOURCE_EXHAUSTED|OVER_QUERY/.test(code) || /quota|rate limit/i.test(msg)) return 'OVER_QUERY_LIMIT';
   if (/ZERO_RESULTS/.test(code)) return 'ZERO_RESULTS';
   if (/NOT_FOUND/.test(code)) return 'NOT_FOUND';
@@ -908,8 +999,9 @@ async function googleRoute(where) {
   const fail = (st, e) => Object.assign(new Error((e && e.message) || st), { routeStatus: st });
   if ((where.intermediates || []).length > MAX_INTERMEDIATES) throw fail('MAX_WAYPOINTS_EXCEEDED');
   let res;
+  const withTimeout = (pr, ms) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('Google did not answer in ' + ms / 1000 + ' seconds'), { routeTimeout: true })), ms))]);
   try {
-    const { Route } = await getRoutesLib();
+    const { Route } = await withTimeout(getRoutesLib(), 25000);
     const req = {
       origin: where.origin, destination: where.destination,
       intermediates: (where.intermediates || []).map(location => ({ location })),
@@ -917,7 +1009,7 @@ async function googleRoute(where) {
       fields: ['path', 'legs', 'distanceMeters', 'durationMillis']
     };
     if (where.departureTime) req.departureTime = where.departureTime;   // left out = "now"
-    res = await Route.computeRoutes(req);
+    res = await withTimeout(Route.computeRoutes(req), 25000);
   } catch (e) { throw fail(e && e.routeStatus || routeStatusOf(e), e); }
   const route = res && res.routes && res.routes[0];
   if (!route || !route.legs || !route.legs.length) throw fail('ZERO_RESULTS');
@@ -931,7 +1023,7 @@ async function googleRoute(where) {
 function computeLive() {
   const rem = remainingStops();
   if (!rem.length || !D.pos) return;
-  if (!navigator.onLine) { return; }
+  if (!navigator.onLine) { showErr('No internet connection — times will update when the signal comes back.'); return; }
   D.pending = false;
   D.inflight = true; D.lastCompute = Date.now(); D.lastComputePos = { ...D.pos };
   const loc = s => s.lat != null ? { lat: s.lat, lng: s.lng } : (s.query || s.name);
@@ -952,6 +1044,7 @@ function computeLive() {
       D.results = { updatedAt: now, source: 'live', etas, path };
       state.trip.results = D.results; saveTrip();
       showErr(null);
+      if (D.wantDone) { D.wantDone = false; flash('✓ Times updated just now', 'ok'); }
       D.map && D.map.setRoute(path);
       refreshMap(D.fitMode === 'all' || !D.fitted); D.fitted = true;
       renderList(false);
@@ -959,7 +1052,10 @@ function computeLive() {
     .catch(e => {
       if (session !== D.token) return;
       const st = e.routeStatus || routeStatusOf(e);
-      showErr(dirErrMsg(st, true) + ' Showing last ETAs.');
+      D.wantDone = false;
+      const detail = (e && e.message && e.message !== st) ? ' (Google said: ' + String(e.message).replace(/\s+/g, ' ').slice(0, 140) + ')' : '';
+      showErr(dirErrMsg(st, true) + (D.results ? ' Showing the last times.' : '') + detail);
+      flash('Couldn’t get new times — see the red message.', 'bad'); uiTick();
       if (st !== 'REQUEST_DENIED') D.lastCompute = Math.min(D.lastCompute, Date.now() - updateMs() + MIN_GAP_MS);   // temporary trouble: try again in a minute, not after the full wait
     })
     .finally(() => { D.inflight = false; });
@@ -1112,7 +1208,7 @@ function renderList(forceStructure) {
     const el = list.querySelector(`.stop[data-id="${s.id}"]`); if (!el) return;
     const e = res && res.etas[s.id];
     const set = (f, t, html) => { const n = el.querySelector(`[data-f="${f}"]`); if (!n) return; if (html) { if (n.innerHTML !== t) n.innerHTML = t; } else if (n.textContent !== t) n.textContent = t; };
-    if (!e) { set('eta', '--:--'); set('rem', 'Calculating…'); set('dist', ''); return; }
+    if (!e) { set('eta', '--:--'); set('rem', D.mode === 'live' && !D.pos ? 'Waiting for location…' : D.err ? 'No time yet' : 'Calculating…'); set('dist', ''); return; }
     const here = s.lat != null && D.pos && haversineMi(D.pos, s) < 0.3;
     const passed = !here && e.arrived;
     el.classList.toggle('here', !!here); el.classList.toggle('passed', !!passed);
@@ -1141,12 +1237,15 @@ function uiTick() {
   const rb = $('#btnRefresh');
   if (D.mode === 'live') {
     const wait = D.pending ? Math.max(1, Math.ceil((MIN_GAP_MS - (Date.now() - D.lastCompute)) / 1000)) : 0;
-    rb.textContent = D.inflight ? '⟳ Updating…' : wait > 0 && wait <= 60 ? '⟳ Updating in ' + wait + 's' : '⟳ Update now';
+    rb.textContent = D.inflight ? '⟳ Updating…' : wait > 0 && wait <= 60 ? '⟳ Updating in ' + wait + 's' : (D.btnFlashUntil && Date.now() < D.btnFlashUntil) ? '✓ Updated' : '⟳ Update now';
   } else rb.textContent = '⟳ Refresh';
   const g = $('#gpsChip');
   if (D.mode === 'live' && D.pos && Date.now() - D.posAt > 120000) { g.textContent = 'GPS lost'; g.className = 'chip bad'; }
   else g.classList.add('hidden');
   if (D.mode === 'live' && D.pos && Date.now() - D.posAt > 120000) g.classList.remove('hidden');
+  const si = statusInfo(), sl = $('#statusLine');
+  if (sl.textContent !== si.text) sl.textContent = si.text;
+  sl.className = 'status-line ' + si.kind;
   renderList(false);
   autoDropCheck(now);
   nextBannerCheck(now);
@@ -1164,7 +1263,7 @@ function setBusMode(on) {
 }
 function busFooter() {   // small "updated X ago" line on the bus screen + banner space
   const u = $('#busUpd'), r = D.results;
-  const t = D.mode === 'demo' ? 'Demo data' : r ? 'Updated ' + fmtAgo(Date.now() - r.updatedAt) : 'Waiting for first update…';
+  const t = D.mode === 'demo' ? 'Demo data' : r ? 'Updated ' + fmtAgo(Date.now() - r.updatedAt) : statusInfo().text;
   if (u.textContent !== t) u.textContent = t;
   const more = Math.max(0, remainingStops().length - 4);
   const m = more ? '+ ' + more + ' more stop' + (more > 1 ? 's' : '') : '';
@@ -1249,7 +1348,18 @@ function bindDrive() {
   $('#drive').addEventListener('pointerdown', () => { if (D.bus) { lpStop(); lp = setTimeout(() => { lp = null; if (D.bus) setBusMode(false); }, 1000); } });
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => $('#drive').addEventListener(ev, lpStop));
   $('#btnEdit').addEventListener('click', () => { setBusMode(false); stopDrive(); releaseWake(); state.trip.started = false; saveTrip(); show('setup'); renderSetup(); });
-  $('#btnRefresh').addEventListener('click', () => { if (D.mode === 'live') { maybeRefresh(true); uiTick(); } else demoTick(); });
+  $('#btnRefresh').addEventListener('click', () => {
+    if (D.mode !== 'live') { demoTick(); flash('Demo times refreshed', 'ok'); return; }
+    if (!D.pos) { flash('Can’t update yet — still waiting for your location.', 'bad'); if (D.gps) showGpsBanner(); return; }
+    if (!navigator.onLine) { flash('No internet connection — can’t update right now.', 'bad'); return; }
+    D.wantDone = true;
+    const wait = Math.ceil((MIN_GAP_MS - (Date.now() - D.lastCompute)) / 1000);
+    maybeRefresh(true);
+    if (D.inflight) flash('Asking Google for fresh times…', 'warn');
+    else flash('Google was just asked — the update will go out in ' + Math.max(1, wait) + ' s (at most once a minute).', 'warn');
+  });
+  $('#gpsRetry').addEventListener('click', gpsRetry);
+  $('#gpsHide').addEventListener('click', hideGpsBanner);
   $('#btnFit').addEventListener('click', () => {
     D.fitMode = D.fitMode === 'next' ? 'all' : 'next';
     $('#btnFit').textContent = D.fitMode === 'next' ? 'Map: next stop' : 'Map: whole route';

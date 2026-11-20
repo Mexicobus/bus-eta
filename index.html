@@ -100,6 +100,17 @@
     <button id="btnDemoReset" class="btn tiny ghost">↺ Restart</button>
   </div>
   <div id="errBanner" class="err-banner hidden"></div>
+  <div id="gpsBanner" class="gps-banner hidden" role="alert">
+    <b id="gpsWhy"></b>
+    <div class="gps-how">To fix it on iPhone:
+      <ol>
+        <li><b>Settings › Privacy &amp; Security › Location Services</b> — make sure it is On, then tap your browser (Safari, Brave, DuckDuckGo…) and choose <b>While Using the App</b> (turn Precise Location on).</li>
+        <li>In <b>Safari</b>: tap <b>aA</b> in the address bar › <b>Website Settings</b> › <b>Location</b> › <b>Allow</b>. (Other browsers: look in the browser’s own settings for Location.)</li>
+        <li>Come back here and tap <b>Try again</b>. If it still won’t work, open this page in Safari.</li>
+      </ol>
+    </div>
+    <div class="gps-btns"><button id="gpsRetry" class="btn small primary">Try again</button><button id="gpsHide" class="btn small ghost">Hide this</button></div>
+  </div>
   <div id="nextBanner" class="next-banner hidden" role="status"></div>
   <div id="autoBanner" class="auto-banner hidden" role="status"><span id="autoText"></span><button id="btnAutoUndo" class="btn undo">↶ UNDO</button></div>
   <main class="drive-main">
@@ -110,6 +121,7 @@
     </div>
     <div class="list-pane">
       <div id="summary" class="summary"></div>
+      <div id="statusLine" class="status-line" role="status"></div>
       <div id="stopList" class="stop-list"></div>
       <div id="doneBox" class="done-box hidden"></div>
       <div id="busFoot" class="bus-foot"><span id="busMore"></span><span id="busUpd"></span></div>
