@@ -376,3 +376,48 @@ input:focus{outline:3px solid var(--blue);border-color:var(--blue)}
   .trip-list .btn{min-height:32px;min-width:36px;font-size:14px;padding:0;border-radius:9px;border-width:2px}
   .trip-list{gap:6px}
 }
+
+/* ---- Saved stops (address book) ---- */
+.startbar.two-btn{grid-template-columns:.85fr 1fr 1.7fr}
+.btn.go.saved{background:#2a2410;border-color:var(--accent);color:var(--accent);font-size:20px;line-height:1.15}
+.starchip.on{color:var(--accent);border-color:#7a6a14}
+.places-modal{display:flex;flex-direction:column;max-height:min(760px,100%)}
+.places-modal h2{display:flex;align-items:center;gap:10px}
+.places-modal .count{margin-right:0}
+.places-list{list-style:none;margin:6px 0 12px;padding:0;display:flex;flex-direction:column;gap:8px;overflow:auto;min-height:120px;flex:1 1 auto}
+.places-list li{background:var(--card);border:2px solid var(--line);border-radius:14px;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+.places-list li.flash{border-color:var(--green);background:#0f2018}
+.places-list .pick{font:inherit;text-align:left;background:transparent;border:0;color:var(--text);padding:2px 0;cursor:pointer;touch-action:manipulation}
+.places-list .pn{display:block;font-size:20px;font-weight:600;line-height:1.25;overflow-wrap:anywhere}
+.places-list .pick small{display:block;color:var(--accent);font-size:15px;font-weight:700;margin-top:2px}
+.places-list .pacts{display:flex;gap:6px;flex-wrap:wrap}
+.places-list .dwellchip{min-height:40px;font-size:15px}
+.places-list .addchip{background:var(--blue);border-color:var(--blue);color:#001a33}
+.places-list .delchip{color:var(--red);border-color:#5a2b2d}
+.places-list .empty{display:block}
+@media (max-width:600px){
+  .startbar.two-btn{grid-template-columns:1fr 1fr;gap:8px}
+  .startbar.two-btn #btnStart{grid-column:1/-1;grid-row:2}
+  .startbar.two-btn #btnPlaces{grid-row:1;font-size:16px;min-height:48px}
+  .startbar.two-btn #btnPreview{grid-row:1;font-size:16px;min-height:48px}
+  .btn.go.preview{font-size:16px}
+  .btn.go.saved{font-size:16px}
+  .startbar.two-btn #btnStart{font-size:22px;min-height:60px}
+  .places-modal{padding:12px}
+  .places-list .pn{font-size:18px}
+  .places-list .dwellchip{min-height:34px;font-size:14px;padding:0 10px}
+  .places-list .pacts .addchip{flex:1}
+}
+
+.places-list .dwellchip:disabled{opacity:.3;pointer-events:none}
+.places-list .mv{min-width:44px;padding:0 10px;margin-left:auto}
+.places-list .mv + .mv{margin-left:0}
+@media (max-width:600px){
+  .places-list .pacts{gap:5px}
+  .places-list .dwellchip{min-height:32px;font-size:13px;padding:0 9px}
+  .places-list .mv{min-width:36px;padding:0}
+  .places-list .addchip{flex:0 0 auto!important}
+}
+
+.places-modal h2,.places-modal input,.places-modal .msg,.places-modal .row{flex:none}
+.places-modal .msg{min-height:24px}

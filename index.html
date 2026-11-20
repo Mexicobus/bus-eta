@@ -69,6 +69,7 @@
   </div>
 
   <footer class="startbar two-btn">
+    <button id="btnPlaces" class="btn go saved">⭐ Saved stops</button>
     <button id="btnPreview" class="btn go preview">🗺 Preview trip</button>
     <button id="btnStart" class="btn go">▶ START DRIVING</button>
   </footer>
@@ -184,6 +185,37 @@
       <button id="btnSetSave" class="btn primary">Save</button>
       <button id="btnSetCancel" class="btn ghost">Cancel</button>
       <button id="btnSetClearKey" class="btn ghost danger">Remove key</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SAVED STOPS (address book) ============ -->
+<div id="places" class="overlay hidden">
+  <div class="modal places-modal">
+    <h2>⭐ Saved stops <span id="plCount" class="count"></span></h2>
+    <input id="plSearch" type="text" placeholder="Search saved stops" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Search saved stops">
+    <div id="plMsg" class="msg" role="status"></div>
+    <ul id="plList" class="places-list"></ul>
+    <div class="row">
+      <button id="plNew" class="btn primary">＋ New saved stop</button>
+      <button id="plClose" class="btn ghost">Done</button>
+    </div>
+  </div>
+</div>
+
+<div id="placeEdit" class="overlay hidden">
+  <div class="modal">
+    <h2 id="peTitle">New saved stop</h2>
+    <label class="field">Business name and address (or city)
+      <input id="peText" type="text" maxlength="150" autocomplete="off" autocapitalize="words" enterkeyhint="done" placeholder="e.g. Golden Corral, 3625 E Main St, Richmond, IN">
+    </label>
+    <label class="field">Usual stop time (minutes) — leave empty to use the standard time
+      <input id="peMin" type="number" inputmode="numeric" min="0" max="480" placeholder="Standard">
+    </label>
+    <div id="peErr" class="msg err"></div>
+    <div class="row">
+      <button id="peSave" class="btn primary">Save</button>
+      <button id="peCancel" class="btn ghost">Cancel</button>
     </div>
   </div>
 </div>

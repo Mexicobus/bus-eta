@@ -151,11 +151,13 @@ const state = {
   trip: LS.get('busEta.trip', { stops: [], started: false, results: null }),
   saved: LS.get('busEta.savedTrips', []),        // named trips on this device
   loadedId: LS.get('busEta.loadedTrip', null),   // which saved trip the current stops came from
+  places: LS.get('busEta.savedStops', []),       // "Saved stops" address book
   sessionDemo: false   // set if Google rejects the key during this session
 };
 const saveSettings = () => LS.set('busEta.settings', state.settings);
 const saveTrip = () => LS.set('busEta.trip', state.trip);
 const saveSaved = () => { LS.set('busEta.savedTrips', state.saved); LS.set('busEta.loadedTrip', state.loadedId); };
+const savePlaces = () => LS.set('busEta.savedStops', state.places);
 const isDemo = () => !state.settings.apiKey || state.settings.forceDemo || state.sessionDemo;
 const remainingStops = () => state.trip.stops.filter(s => !s.dropped);
 
@@ -179,7 +181,7 @@ function renderSetup() {
   $('#tripList').innerHTML = stops.length ? stops.map((s, i) => `
     <li data-id="${s.id}" class="${s.dropped ? 'dropped' : ''}">
       <span class="num">${i + 1}</span>
-      <span class="nm"><span class="nmtext">${esc(s.name)}</span>${s.dropped ? '<small>already dropped off</small>' : `<span class="chiprow"><button class="dwellchip ${hasOwnDwell(s) ? 'custom' : ''}" data-act="dwell" aria-label="Change stop time for ${esc(s.name)}">⏱ <span class="lg">Stop time: </span>${fmtMin(stopDwellMin(s, state.settings.dwellMin))}${hasOwnDwell(s) ? '' : ' <small class="lg">(standard)</small>'}</button><button class="dwellchip editchip" data-act="edit" aria-label="Edit the text of ${esc(s.name)}">✎ Edit</button></span>`}</span>
+      <span class="nm"><span class="nmtext">${esc(s.name)}</span>${s.dropped ? '<small>already dropped off</small>' : `<span class="chiprow"><button class="dwellchip ${hasOwnDwell(s) ? 'custom' : ''}" data-act="dwell" aria-label="Change stop time for ${esc(s.name)}">⏱ <span class="lg">Stop time: </span>${fmtMin(stopDwellMin(s, state.settings.dwellMin))}${hasOwnDwell(s) ? '' : ' <small class="lg">(standard)</small>'}</button><button class="dwellchip editchip" data-act="edit" aria-label="Edit the text of ${esc(s.name)}">✎ Edit</button><button class="dwellchip starchip ${placeFor(s) ? 'on' : ''}" data-act="star" aria-label="${placeFor(s) ? 'Already in Saved stops: ' : 'Save to Saved stops: '}${esc(s.name)}">${placeFor(s) ? '★' : '☆'} <span class="lg">${placeFor(s) ? 'Saved' : 'Save'}</span></button></span>`}</span>
       <button class="btn" data-act="up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
       <button class="btn" data-act="down" aria-label="Move down" ${i === stops.length - 1 ? 'disabled' : ''}>▼</button>
       <button class="btn danger" data-act="rm" aria-label="Remove">✕</button>
@@ -193,7 +195,9 @@ function renderSetup() {
 function setMsg(text, kind) { const m = $('#addMsg'); m.textContent = text || ''; m.className = 'msg ' + (kind || ''); }
 
 function addToTrip(stop) {
-  state.trip.stops.push({ id: uid(), name: stop.name, query: stop.query || stop.name, lat: stop.lat ?? null, lng: stop.lng ?? null, dropped: false });
+  const ns = { id: uid(), name: stop.name, query: stop.query || stop.name, lat: stop.lat ?? null, lng: stop.lng ?? null, dropped: false };
+  if (hasOwnDwell(stop)) ns.dwellMin = +stop.dwellMin;
+  state.trip.stops.push(ns);
   state.trip.results = null;
   saveTrip(); renderSetup();
 }
@@ -228,6 +232,7 @@ function bindSetup() {
     const id = b.closest('li').dataset.id, st = state.trip.stops, i = st.findIndex(s => s.id === id);
     if (b.dataset.act === 'dwell') { openDwell(id); return; }
     if (b.dataset.act === 'edit') { editStopText(state.trip.stops[i]); return; }
+    if (b.dataset.act === 'star') { starStop(state.trip.stops[i]); return; }
     if (b.dataset.act === 'rm') st.splice(i, 1);
     if (b.dataset.act === 'up' && i > 0) [st[i - 1], st[i]] = [st[i], st[i - 1]];
     if (b.dataset.act === 'down' && i < st.length - 1) [st[i + 1], st[i]] = [st[i], st[i + 1]];
@@ -324,7 +329,7 @@ function renderTrips() {
   $('#btnSaveAs').classList.toggle('hidden', !lt);
   $('#btnSaveAs').disabled = !has;
   $('#btnReverse').disabled = state.trip.stops.length < 2;
-  $('#btnBackup').disabled = !state.saved.length;
+  $('#btnBackup').disabled = !state.saved.length && !state.places.length;
   $('#savedList').innerHTML = state.saved.length ? state.saved.map(t => `
     <li data-tid="${t.id}" class="${t.id === state.loadedId ? 'loaded' : ''}">
       <span class="tnm">${esc(t.name)}<small>${t.stops.length} stop${t.stops.length === 1 ? '' : 's'}${t.id === state.loadedId ? ' · loaded now' : ''}</small></span>
@@ -414,14 +419,14 @@ function reverseStops() {
   saveTrip(); renderSetup(); toast('Stops reversed. Tap “Save trip” (or “Save as new name”) to keep it.');
 }
 function exportTrips() {
-  if (!state.saved.length) return;
-  const data = { app: TRIP_FILE_APP, version: 1, exportedAt: new Date().toISOString(), trips: state.saved.map(t => ({ name: t.name, stops: t.stops })) };
+  if (!state.saved.length && !state.places.length) return;
+  const data = { app: TRIP_FILE_APP, version: 1, exportedAt: new Date().toISOString(), trips: state.saved.map(t => ({ name: t.name, stops: t.stops })), savedStops: state.places.map(p => cleanPlace(p)) };
   const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url; a.download = 'bus-eta-trips-' + new Date().toISOString().slice(0, 10) + '.json';
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  toast('Backup file saved: ' + state.saved.length + ' trip' + (state.saved.length === 1 ? '' : 's') + '.');
+  toast('Backup file saved: ' + state.saved.length + ' trip' + (state.saved.length === 1 ? '' : 's') + ' and ' + state.places.length + ' saved stop' + (state.places.length === 1 ? '' : 's') + '.');
 }
 function cleanImportedStop(s) {
   if (!s || typeof s.name !== 'string' || !s.name.trim()) return null;
@@ -435,17 +440,25 @@ async function importTripsFile(file) {
   try { data = JSON.parse(await file.text()); } catch (e) { data = null; }
   const list = data && data.app === TRIP_FILE_APP && Array.isArray(data.trips) ? data.trips : null;
   const trips = (list || []).map(t => ({ name: String(t && t.name || '').trim().slice(0, 40), stops: ((t && t.stops) || []).map(cleanImportedStop).filter(Boolean) })).filter(t => t.name && t.stops.length);
-  if (!trips.length) { await ask({ title: 'Could not restore', msg: 'That file does not look like a Bus ETA trips backup, or it has no trips in it.', ok: 'OK', cancel: false }); return; }
+  const places = (data && data.app === TRIP_FILE_APP && Array.isArray(data.savedStops) ? data.savedStops : []).map(cleanPlace).filter(Boolean);
+  if (!trips.length && !places.length) { await ask({ title: 'Could not restore', msg: 'That file does not look like a Bus ETA trips backup, or it has no trips in it.', ok: 'OK', cancel: false }); return; }
   const clashes = trips.filter(t => findByName(t.name));
-  const yes = await ask({ title: 'Restore ' + trips.length + ' trip' + (trips.length === 1 ? '' : 's') + '?',
-    msg: trips.map(t => t.name).join(', ') + (clashes.length ? '. Trips with the same name on this device (' + clashes.map(t => t.name).join(', ') + ') will be replaced.' : '.'), ok: 'Restore' });
+  const newPlaces = places.filter(p => !placeByKey(p));
+  const parts = [];
+  if (trips.length) parts.push(trips.length + ' trip' + (trips.length === 1 ? '' : 's') + ' (' + trips.map(t => t.name).join(', ') + ')');
+  if (places.length) parts.push(places.length + ' saved stop' + (places.length === 1 ? '' : 's') + (places.length !== newPlaces.length ? ', ' + newPlaces.length + ' new' : ''));
+  const yes = await ask({ title: 'Restore ' + (trips.length ? trips.length + ' trip' + (trips.length === 1 ? '' : 's') : places.length + ' saved stop' + (places.length === 1 ? '' : 's')) + '?',
+    msg: parts.join(' and ') + (clashes.length ? '. Trips with the same name on this device (' + clashes.map(t => t.name).join(', ') + ') will be replaced.' : '.') + (places.length ? ' Saved stops are added without duplicates.' : ''), ok: 'Restore' });
   if (!yes) return;
+  places.forEach(p => { const ex = placeByKey(p); if (!ex) state.places.push(Object.assign({ id: uid() }, p)); else if (hasOwnDwell(p) && !hasOwnDwell(ex)) ex.dwellMin = p.dwellMin; });
+  if (places.length) savePlaces();
   trips.forEach(t => {
     const ex = findByName(t.name);
     if (ex) { ex.name = t.name; ex.stops = t.stops; ex.savedAt = Date.now(); }
     else state.saved.push({ id: uid(), name: t.name, stops: t.stops, savedAt: Date.now() });
   });
-  saveSaved(); renderSetup(); toast('Restored ' + trips.length + ' trip' + (trips.length === 1 ? '' : 's') + '.');
+  saveSaved(); renderSetup();
+  toast('Restored ' + (trips.length ? trips.length + ' trip' + (trips.length === 1 ? '' : 's') : '') + (trips.length && places.length ? ' and ' : '') + (places.length ? places.length + ' saved stop' + (places.length === 1 ? '' : 's') : '') + '.');
 }
 function bindTrips() {
   $('#btnSaveTrip').addEventListener('click', saveTripUpdate);
@@ -461,6 +474,119 @@ function bindTrips() {
     if (b.dataset.tact === 'rename') renameSavedTrip(id);
     if (b.dataset.tact === 'delete') deleteSavedTrip(id);
   });
+}
+
+
+/* ================================================================== SAVED STOPS (address book) */
+const placeKey = p => nameKey(p.query || p.name);
+const placeByKey = p => state.places.find(x => placeKey(x) === placeKey(p));
+const placeFor = s => state.places.find(x => placeKey(x) === placeKey(s));
+function cleanPlace(p) {
+  const o = cleanImportedStop(p); if (!o) return null;
+  return o;
+}
+(function migrateRegular() {   // one time: old "Regular stops" -> Saved stops (nothing else is touched)
+  const old = LS.get('busEta.regular', null);
+  if (!Array.isArray(old) || LS.get('busEta.regularMigrated', false)) return;
+  const isSeed = r => SAMPLE_STOPS.some(x => nameKey(x.name) === nameKey(r.name) && x.lat === r.lat);   // the demo cities the old list started with
+  old.forEach(r => { const o = cleanPlace(r); if (!o || isSeed(o)) return;
+    if (!placeByKey(o)) state.places.push(Object.assign({ id: uid() }, o)); });
+  savePlaces(); LS.set('busEta.regularMigrated', true);
+})();
+function starStop(stop) {
+  if (!stop) return;
+  if (placeFor(stop)) { toast('“' + stop.name + '” is already in Saved stops.'); return; }
+  const o = { id: uid(), name: stop.name, query: stop.query || stop.name, lat: stop.lat ?? null, lng: stop.lng ?? null };
+  if (hasOwnDwell(stop)) o.dwellMin = +stop.dwellMin;
+  state.places.push(o); savePlaces(); renderSetup(); toast('⭐ Saved “' + stop.name + '” to Saved stops.');
+}
+let placesFlash = null;
+function renderPlaces() {
+  const q = nameKey($('#plSearch').value || '');
+  const all = state.places, list = q ? all.filter(p => nameKey(p.name).includes(q)) : all;
+  $('#plCount').textContent = all.length ? '(' + all.length + ')' : '';
+  const arrows = !q;   // moving only makes sense in the full list
+  $('#plList').innerHTML = list.length ? list.map((p, i) => `
+    <li data-pid="${p.id}" class="${placesFlash === p.id ? 'flash' : ''}">
+      <button class="pick" data-pact="add" aria-label="Add ${esc(p.name)} to today's trip"><span class="pn">${esc(p.name)}</span>${hasOwnDwell(p) ? `<small>⏱ Stop time: ${fmtMin(+p.dwellMin)}</small>` : ''}</button>
+      <span class="pacts"><button class="dwellchip addchip" data-pact="add" aria-label="Add to trip">＋ Add</button><button class="dwellchip" data-pact="edit" aria-label="Edit ${esc(p.name)}">✎ Edit</button>${arrows ? `<button class="dwellchip mv" data-pact="up" aria-label="Move ${esc(p.name)} up" ${i === 0 ? 'disabled' : ''}>▲</button><button class="dwellchip mv" data-pact="down" aria-label="Move ${esc(p.name)} down" ${i === list.length - 1 ? 'disabled' : ''}>▼</button>` : ''}<button class="dwellchip delchip" data-pact="del" aria-label="Delete ${esc(p.name)}">✕ <span class="lg">Delete</span></button></span>
+    </li>`).join('')
+    : `<li class="empty" style="display:block">${all.length ? 'No saved stop matches “' + esc($('#plSearch').value.trim()) + '”.' : 'No saved stops yet.<br>Tap “+ New saved stop”, or tap ☆ on a stop in your trip.'}</li>`;
+}
+function openPlaces() { $('#plSearch').value = ''; $('#plMsg').textContent = ''; $('#plMsg').className = 'msg'; placesFlash = null; renderPlaces(); $('#places').classList.remove('hidden'); }
+function closePlaces() { $('#places').classList.add('hidden'); renderSetup(); }
+function addPlaceToTrip(id) {
+  const p = state.places.find(x => x.id === id); if (!p) return;
+  addToTrip(p);
+  placesFlash = id; renderPlaces();
+  const m = $('#plMsg'); m.textContent = '✓ Added “' + p.name.split(',')[0] + '” as stop ' + state.trip.stops.length + (hasOwnDwell(p) ? ' (' + fmtMin(+p.dwellMin) + ' stop)' : '') + '.'; m.className = 'msg ok';
+  setTimeout(() => { if ($('#plMsg').textContent.startsWith('✓ Added “' + p.name.split(',')[0])) { $('#plMsg').textContent = ''; } placesFlash = null; }, 2500);
+}
+/* New / edit pop-up: address text + optional stop time */
+let placeEditId = null, placeEditGeo = null;
+function openPlaceEdit(id) {
+  const p = id ? state.places.find(x => x.id === id) : null; if (id && !p) return;
+  placeEditId = id || null;
+  $('#peTitle').textContent = p ? 'Edit saved stop' : 'New saved stop';
+  $('#peText').value = p ? p.name : ''; $('#peMin').value = p && hasOwnDwell(p) ? p.dwellMin : '';
+  $('#peErr').textContent = ''; $('#peSave').disabled = false;
+  $('#placeEdit').classList.remove('hidden'); setTimeout(() => $('#peText').focus(), 30);
+}
+const closePlaceEdit = () => { $('#placeEdit').classList.add('hidden'); placeEditId = null; };
+async function savePlaceEdit() {
+  const err = $('#peErr'), text = $('#peText').value.trim().slice(0, 150);
+  if (!text) { err.textContent = 'Type a business name and address, or a city.'; return; }
+  const minRaw = $('#peMin').value.trim();
+  let mins = null;
+  if (minRaw !== '') { mins = Math.round(+minRaw); if (!isFinite(mins) || mins < 0 || mins > MAX_STOP_MIN) { err.textContent = 'Stop time should be a number of minutes (0–' + MAX_STOP_MIN + '), or leave it empty to use the standard time.'; return; } }
+  const clash = state.places.find(x => placeKey(x) === nameKey(text) && x.id !== placeEditId);
+  if (clash) { err.textContent = 'That stop is already saved.'; return; }
+  let g = null;
+  if (isDemo()) {
+    $('#peSave').disabled = true; err.textContent = 'Looking up place…';
+    try { g = await geocodeDemo(text); } catch (e) { err.textContent = 'Demo mode needs internet to look up places.'; $('#peSave').disabled = false; return; }
+    $('#peSave').disabled = false;
+    if (!g) { err.textContent = 'Couldn’t find that place. Try “City, ST”.'; return; }
+  }
+  let p = placeEditId ? state.places.find(x => x.id === placeEditId) : null;
+  const textChanged = !p || p.name !== text;
+  if (!p) { p = { id: uid() }; state.places.push(p); }
+  if (textChanged) { p.name = text; p.query = text; p.lat = g ? g.lat : null; p.lng = g ? g.lng : null; }
+  if (mins == null) delete p.dwellMin; else p.dwellMin = mins;
+  savePlaces(); closePlaceEdit(); renderPlaces(); renderSetup();
+  const m = $('#plMsg'); m.textContent = '✓ Saved “' + text + '”.'; m.className = 'msg ok';
+}
+async function deletePlace(id) {
+  const p = state.places.find(x => x.id === id); if (!p) return;
+  const yes = await ask({ title: 'Delete “' + p.name + '”?', msg: 'This removes it from Saved stops on this device. Stops already in today’s trip or in saved trips are not changed.', ok: 'Delete', danger: true });
+  if (!yes) return;
+  state.places = state.places.filter(x => x !== p); savePlaces(); renderPlaces(); renderSetup();
+  const m = $('#plMsg'); m.textContent = 'Deleted “' + p.name + '”.'; m.className = 'msg';
+}
+function bindPlaces() {
+  $('#btnPlaces').addEventListener('click', openPlaces);
+  $('#plClose').addEventListener('click', closePlaces);
+  $('#places').addEventListener('click', e => { if (e.target === $('#places')) closePlaces(); });
+  $('#plSearch').addEventListener('input', renderPlaces);
+  $('#plNew').addEventListener('click', () => openPlaceEdit(null));
+  $('#plList').addEventListener('click', e => {
+    const b = e.target.closest('[data-pact]'); if (!b) return;
+    const id = b.closest('li').dataset.pid;
+    if (b.dataset.pact === 'add') addPlaceToTrip(id);
+    if (b.dataset.pact === 'edit') openPlaceEdit(id);
+    if (b.dataset.pact === 'del') deletePlace(id);
+    if (b.dataset.pact === 'up' || b.dataset.pact === 'down') {
+      const a = state.places, i = a.findIndex(x => x.id === id), j = b.dataset.pact === 'up' ? i - 1 : i + 1;
+      if (i < 0 || j < 0 || j >= a.length) return;
+      [a[i], a[j]] = [a[j], a[i]]; savePlaces(); renderPlaces();
+      const nb = $('#plList li[data-pid="' + id + '"] [data-pact="' + b.dataset.pact + '"]'); if (nb && !nb.disabled) nb.focus();
+    }
+  });
+  $('#peSave').addEventListener('click', savePlaceEdit);
+  $('#peCancel').addEventListener('click', closePlaceEdit);
+  $('#placeEdit').addEventListener('click', e => { if (e.target === $('#placeEdit')) closePlaceEdit(); });
+  $('#placeEdit').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); savePlaceEdit(); } if (e.key === 'Escape') closePlaceEdit(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#places').classList.contains('hidden') && $('#placeEdit').classList.contains('hidden') && $('#dlg').classList.contains('hidden')) closePlaces(); });
 }
 
 /* ---------------- per-stop time editor (used on both screens) ---------------- */
@@ -1397,7 +1523,7 @@ function bindPreview() {
 
 /* ================================================================== BOOT */
 function boot() {
-  bindSetup(); bindDrive(); bindDwell(); bindTrips(); bindPreview();
+  bindSetup(); bindDrive(); bindDwell(); bindTrips(); bindPlaces(); bindPreview();
   renderSetup();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { });
   const q = new URLSearchParams(location.search);
