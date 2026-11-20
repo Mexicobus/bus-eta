@@ -179,7 +179,7 @@ function renderSetup() {
   $('#tripList').innerHTML = stops.length ? stops.map((s, i) => `
     <li data-id="${s.id}" class="${s.dropped ? 'dropped' : ''}">
       <span class="num">${i + 1}</span>
-      <span class="nm">${esc(s.name)}${s.dropped ? '<small>already dropped off</small>' : `<span class="chiprow"><button class="dwellchip ${hasOwnDwell(s) ? 'custom' : ''}" data-act="dwell" aria-label="Change stop time for ${esc(s.name)}">⏱ Stop time: ${fmtMin(stopDwellMin(s, state.settings.dwellMin))}${hasOwnDwell(s) ? '' : ' <small>(standard)</small>'}</button><button class="dwellchip editchip" data-act="edit" aria-label="Edit the text of ${esc(s.name)}">✎ Edit</button></span>`}</span>
+      <span class="nm"><span class="nmtext">${esc(s.name)}</span>${s.dropped ? '<small>already dropped off</small>' : `<span class="chiprow"><button class="dwellchip ${hasOwnDwell(s) ? 'custom' : ''}" data-act="dwell" aria-label="Change stop time for ${esc(s.name)}">⏱ <span class="lg">Stop time: </span>${fmtMin(stopDwellMin(s, state.settings.dwellMin))}${hasOwnDwell(s) ? '' : ' <small class="lg">(standard)</small>'}</button><button class="dwellchip editchip" data-act="edit" aria-label="Edit the text of ${esc(s.name)}">✎ Edit</button></span>`}</span>
       <button class="btn" data-act="up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
       <button class="btn" data-act="down" aria-label="Move down" ${i === stops.length - 1 ? 'disabled' : ''}>▼</button>
       <button class="btn danger" data-act="rm" aria-label="Remove">✕</button>
@@ -971,7 +971,7 @@ function renderList(forceStructure) {
             <div class="side"><span data-f="rem">—</span><span data-f="dist"></span></div>
           </div>
         </div>
-        <button class="btn drop" data-act="drop" aria-label="Dropped off at ${esc(s.name)}">✓ DROPPED<br>OFF</button>
+        <button class="btn drop" data-act="drop" aria-label="Dropped off at ${esc(s.name)}">✓ DROPPED <br>OFF</button>
       </div>`).join('');
     const done = stops.map((s, i) => [s, i]).filter(([s]) => s.dropped);
     const box = $('#doneBox');

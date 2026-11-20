@@ -263,3 +263,104 @@ input:focus{outline:3px solid var(--blue);border-color:var(--blue)}
 #drive.bus .bus-exit{display:block;position:fixed;right:0;top:0;width:64px;height:64px;z-index:3000;background:transparent;border:0;color:#fff;font-size:26px;opacity:.14;cursor:pointer}
 #drive.bus .bus-exit:active{opacity:.7}
 @media (orientation:portrait),(max-width:820px){#drive.bus .drive-main{grid-template-columns:1fr;grid-template-rows:34% 1fr}}
+
+/* ---- PHONE (iPhone ~390px): give stop text the full width, controls on a compact row below ---- */
+.trip-list .nm .nmtext{overflow-wrap:anywhere}
+@media (max-width:600px){
+  .bar{padding:8px 12px;gap:8px;min-height:56px}
+  #setup .bar{flex-wrap:wrap;row-gap:6px}
+  #setup .bar h1{font-size:24px;white-space:nowrap}
+  #setup .bar .chip{order:3;flex:1 1 100%;justify-content:center;font-size:15px}
+  #btnSettings{min-height:44px;font-size:16px;padding:0 12px}
+  .chip{font-size:14px;padding:4px 10px}
+  /* one simple scrolling page instead of side-by-side scrolling columns */
+  .setup-grid{display:block;padding:10px}
+  .setup-grid .col{display:block;overflow:visible}
+  .setup-grid .col>.panel{margin-bottom:10px}
+  .panel{padding:12px;border-radius:16px}
+  .panel h2{font-size:20px;min-height:40px}
+  .count{font-size:18px}
+  .hint{font-size:15px}
+  .startbar{padding:10px 10px 12px}
+  .btn.go{font-size:22px;min-height:64px}
+  .btn.go.preview{font-size:18px}
+  .startbar.two-btn{grid-template-columns:1fr 1.3fr;gap:8px}
+  input[type=text],input[type=password],input[type=number],select{font-size:18px;min-height:54px}
+
+  /* stop list rows (setup) */
+  .trip-list{gap:8px}
+  .trip-list li{display:grid;grid-template-columns:34px minmax(0,1fr) auto auto auto;column-gap:6px;row-gap:6px;align-items:center;padding:8px;min-height:0}
+  .trip-list .num{grid-column:1;grid-row:1;align-self:start;width:32px;height:32px;font-size:17px}
+  .trip-list .nm{display:contents}
+  .trip-list .nm .nmtext{grid-column:2/-1;grid-row:1;font-size:18px;line-height:1.25;font-weight:600;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;word-break:normal;align-self:start}
+  .trip-list li.dropped .nm small{grid-column:2/-1;grid-row:2;margin:0}
+  .trip-list .nm .chiprow{grid-column:1/3;grid-row:2;margin:0;gap:6px;flex-wrap:wrap}
+  .trip-list .nm .dwellchip{min-height:40px;font-size:15px;padding:0 11px;margin:0}
+  .trip-list .nm .dwellchip .lg{display:none}
+  .trip-list .btn{grid-row:2;min-height:44px;min-width:44px;font-size:18px}
+  .trip-list li.dropped .btn{grid-row:2}
+  .trip-list li.empty{display:block}
+  #tripList li:not(.dropped) [data-act=up]{grid-column:3}
+  #tripList li:not(.dropped) [data-act=down]{grid-column:4}
+  #tripList li:not(.dropped) [data-act=rm]{grid-column:5}
+  #tripList li.dropped [data-act=up]{grid-column:3}
+  #tripList li.dropped [data-act=down]{grid-column:4}
+  #tripList li.dropped [data-act=rm]{grid-column:5}
+
+  /* saved trips / backup / restore */
+  .saved-list li{padding:8px}
+  .saved-list .tnm{flex:1 1 100%;font-size:19px}
+  .saved-list .btn,.trips.compact .saved-list .btn{flex:1;min-height:44px;font-size:16px;padding:0 8px}
+  .trips .row .btn,.trips.compact .row .btn{flex:1 1 100%;min-height:48px}
+  .row .btn{flex:1 1 auto}
+  .tripstatus,.trips.compact .tripstatus{font-size:16px}
+
+  /* settings / pop-ups */
+  .overlay{padding:8px}
+  .modal{padding:14px 14px;border-radius:16px}
+  .modal h2{font-size:24px}
+  .field{font-size:16px}
+  .two{grid-template-columns:1fr;gap:0}
+  .quick .btn{min-width:56px;padding:0 6px;font-size:18px}
+  .modal .row .btn{flex:1 1 auto;min-height:50px;font-size:18px;padding:0 14px}
+
+  /* driving + preview */
+  .demo-strip{flex-wrap:wrap;padding:4px 10px}
+  .drive-bar .spacer{display:none}
+  .drive-bar .btn.small{flex:1 1 calc(50% - 6px);padding:0 6px;white-space:nowrap}
+  #preview .drive-bar .btn.small{flex:1 1 auto}
+  #preview .drive-bar .chip{flex:1 1 100%;justify-content:center}
+  .drive-main{grid-template-rows:32% 1fr}
+  .pvform input{width:100%;min-width:0;font-size:18px;min-height:50px}
+  .pvform .row .btn{flex:1 1 calc(50% - 6px)}
+  .pvstop{padding:8px 10px;gap:10px}
+  .pvstop .name{font-size:19px}
+  .pvstop .times{gap:6px 16px}
+  .pvstop .times b{font-size:22px}
+  .summary{flex-wrap:wrap;column-gap:10px}
+
+  /* live stop cards: name gets the whole row; stop time + dropped-off button share a row below */
+  #drive:not(.bus) .stop{position:relative;grid-template-columns:34px minmax(0,1fr);column-gap:8px;row-gap:6px;padding:8px 8px 8px 8px;align-items:center}
+  #drive:not(.bus) .stop .main,#drive:not(.bus) .stop .top{display:contents}
+  #drive:not(.bus) .stop .num{grid-column:1;grid-row:1;align-self:start;width:32px;height:32px;font-size:17px}
+  #drive:not(.bus) .stop .name{grid-column:2;grid-row:1;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;font-size:18px;line-height:1.25;align-self:start}
+  #drive:not(.bus) .stop .row2{grid-column:1/-1;grid-row:2;flex-wrap:nowrap;gap:10px}
+  #drive:not(.bus) .stop .eta{font-size:24px}
+  #drive:not(.bus) .stop .side{font-size:14px}
+  #drive:not(.bus) .stop .top .dwellchip{grid-column:1/-1;grid-row:3;justify-self:start;margin:0;min-height:44px;font-size:15px;padding:0 12px}
+  #drive:not(.bus) .stop .drop{grid-column:1/-1;grid-row:3;justify-self:end;min-width:0;width:calc(50% - 4px);min-height:44px;font-size:14px;padding:0 6px}
+  #drive:not(.bus) .stop .drop br{display:none}
+  #drive:not(.bus) .stop .tag{position:absolute;top:-11px;right:12px;display:none;font-size:13px;padding:1px 8px}
+  #drive:not(.bus) .stop.next .tag{display:inline-block}
+  .done-box{max-height:92px}
+  .auto-banner{flex-wrap:wrap;gap:8px;padding:8px 12px;font-size:17px}
+  .auto-banner .undo{min-height:52px;min-width:0;flex:1 1 100%;font-size:20px}
+  .next-banner{font-size:20px;padding:8px 12px}
+  .err-banner{font-size:15px;padding:6px 12px}
+  .alldone{font-size:26px;padding:20px}
+}
+@media (max-width:600px){ #drive:not(.bus) .stop-list{padding-top:12px} }
+@media (max-width:600px){
+  .pvstop .num{align-self:start;margin-top:2px;width:36px;height:36px;font-size:20px}
+  .quick{gap:6px}.quick .btn{min-width:44px;padding:0 4px;font-size:17px}
+}
