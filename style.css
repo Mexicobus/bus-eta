@@ -364,3 +364,15 @@ input:focus{outline:3px solid var(--blue);border-color:var(--blue)}
   .pvstop .num{align-self:start;margin-top:2px;width:36px;height:36px;font-size:20px}
   .quick{gap:6px}.quick .btn{min-width:44px;padding:0 4px;font-size:17px}
 }
+
+/* phone: smaller per-stop action buttons so the stop names stand out */
+@media (max-width:600px){
+  .trip-list li{padding:6px 8px;row-gap:4px;column-gap:5px}
+  .trip-list .num{width:28px;height:28px;font-size:15px}
+  .trip-list li{grid-template-columns:28px minmax(0,1fr) auto auto auto}
+  .trip-list .nm .nmtext{font-size:19px;line-height:1.25}
+  .trip-list .nm .chiprow{gap:5px}
+  .trip-list .nm .dwellchip{min-height:32px;font-size:13px;padding:0 9px;border-radius:16px}
+  .trip-list .btn{min-height:32px;min-width:36px;font-size:14px;padding:0;border-radius:9px;border-width:2px}
+  .trip-list{gap:6px}
+}
